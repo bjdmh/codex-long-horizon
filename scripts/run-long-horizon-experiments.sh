@@ -75,6 +75,53 @@ append_summary_failure() {
   printf '| %s | failed | - | - | - | - | - | %s |\n' "$name" "$note" >> "$SUMMARY_PATH"
 }
 
+assert_metrics_thresholds() {
+  local result_path="$1"
+  local scenario="$2"
+  RESULT_PATH="$result_path" SCENARIO_NAME="$scenario" python3 - <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+result = json.loads(Path(os.environ['RESULT_PATH']).read_text())
+metrics = result['metrics']
+duration = result['duration_secs']
+scenario = os.environ['SCENARIO_NAME']
+
+def fail(message: str) -> None:
+    print(message, file=sys.stderr)
+    raise SystemExit(1)
+
+if metrics['optional_confirmation_hits'] != 0:
+    fail(f"{scenario}: optional confirmation language detected")
+
+if duration > 300:
+    fail(f"{scenario}: duration {duration}s exceeded 300s threshold")
+
+if metrics['exec_steps'] <= 0 and metrics['apply_patch_steps'] <= 0 and metrics['file_updates'] <= 0:
+    fail(f"{scenario}: no concrete execution actions recorded")
+
+if scenario == 'already_done':
+    if metrics['apply_patch_steps'] != 0 or metrics['file_updates'] != 0:
+        fail(f"{scenario}: already-done task should not edit files")
+    if metrics['exec_steps'] > 6:
+        fail(f"{scenario}: already-done task used too many exec steps ({metrics['exec_steps']})")
+
+if scenario == 'python_fix':
+    if metrics['exec_steps'] > 8:
+        fail(f"{scenario}: python_fix used too many exec steps ({metrics['exec_steps']})")
+
+if scenario == 'dual_fix':
+    if metrics['exec_steps'] < 2:
+        fail(f"{scenario}: dual_fix should require multiple execution steps")
+
+if scenario == 'multi_tool':
+    if metrics['exec_steps'] < 1:
+        fail(f"{scenario}: multi_tool should include at least one exec step")
+PY
+}
+
 run_codex_exec() {
   local prompt="$1"
   local transcript_path="$2"
@@ -212,6 +259,7 @@ PY
     python_fix \
     "$(python3 -c 'import json, pathlib; print(json.dumps({"baseline": pathlib.Path("before.txt").read_text(), "final": pathlib.Path("after.txt").read_text()}))')" \
     "$duration_secs"
+  assert_metrics_thresholds result.json python_fix
   append_summary "python_fix" "passed" "$duration_secs" 0 0 0 0 "Fixed failing pytest suite autonomously"
 }
 
@@ -245,6 +293,7 @@ TXT
     marked_completion \
     "$(python3 -c 'import json, pathlib; print(json.dumps({"todo": pathlib.Path("todo.txt").read_text()}))')" \
     "$duration_secs"
+  assert_metrics_thresholds result.json marked_completion
   append_summary "marked_completion" "passed" "$duration_secs" 0 0 0 0 "Edited target file and stopped after verification"
 }
 
@@ -278,6 +327,7 @@ TXT
     multi_tool \
     "$(python3 -c 'import json, pathlib; print(json.dumps({"notes": pathlib.Path("notes.txt").read_text()}))')" \
     "$duration_secs"
+  assert_metrics_thresholds result.json multi_tool
   append_summary "multi_tool" "passed" "$duration_secs" 0 0 0 0 "Completed multi-tool workflow without confirmation"
 }
 
@@ -342,6 +392,7 @@ PY
     already_done \
     "$(python3 -c 'import json, pathlib; print(json.dumps({"baseline": pathlib.Path("before.txt").read_text(), "final": pathlib.Path("after.txt").read_text()}))')" \
     "$duration_secs"
+  assert_metrics_thresholds result.json already_done
   append_summary "already_done" "passed" "$duration_secs" 0 0 0 0 "Detected complete state without unnecessary edits"
 }
 
@@ -396,6 +447,7 @@ PY
     dual_fix \
     "$(python3 -c 'import json, pathlib; print(json.dumps({"baseline": pathlib.Path("before.txt").read_text(), "final": pathlib.Path("after.txt").read_text()}))')" \
     "$duration_secs"
+  assert_metrics_thresholds result.json dual_fix
   append_summary "dual_fix" "passed" "$duration_secs" 0 0 0 0 "Fixed multiple independent defects without waiting for input"
 }
 

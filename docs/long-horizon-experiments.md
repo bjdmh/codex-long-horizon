@@ -67,5 +67,10 @@ steps, patch applications, file updates, plan updates, and any optional
 confirmation-style phrases detected in the transcript. It also records wall
 clock duration for each scenario and the aggregate total.
 
+The benchmark script also enforces conservative guardrails on those metrics so
+obvious regressions fail fast—for example, optional confirmation hits must stay
+at zero, already-done tasks must not edit files, and simple scenarios must not
+balloon into excessive execution loops.
+
 If one scenario fails, the script keeps running the remaining scenarios and
 records the failure in the Markdown summary before exiting non-zero at the end.
