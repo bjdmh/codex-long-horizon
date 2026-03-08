@@ -49,8 +49,8 @@ assert_no_optional_confirmation_language() {
 
 assert_transcript_shows_execution() {
   local transcript_path="$1"
-  if ! grep -Eiq "(^exec$|^apply_patch\(|^file update$|^Plan update$|^thinking$)" "$transcript_path"; then
-    echo "error: benchmark transcript did not show evidence of autonomous execution steps" >&2
+  if ! grep -Eiq "(^exec$|^apply_patch\(|^file update$)" "$transcript_path"; then
+    echo "error: benchmark transcript did not show evidence of concrete autonomous execution actions" >&2
     exit 13
   fi
 }

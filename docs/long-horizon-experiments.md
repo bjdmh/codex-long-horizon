@@ -46,8 +46,8 @@ The script fails if the agent:
 - makes unnecessary edits in the already-done benchmark
 - asks optional confirmation-style questions in the final transcript instead of
   continuing autonomously
-- fails to show evidence of actually executing steps (for example tool calls,
-  patches, or plan/progress updates) in the transcript
+- fails to show evidence of actually executing concrete actions (for example
+  tool calls, patches, or file updates) in the transcript
 
 Results are written under `/tmp/long-horizon-bench/` by default.
 
