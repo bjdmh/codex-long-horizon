@@ -33,11 +33,15 @@ experiment profile:
    and re-running tests until green
 2. a file-edit task that requires making a change, verifying the result, and
    stopping without prompting for optional confirmation
+3. a multi-tool file task that requires editing and explicit shell verification
+4. an already-done task that requires verifying success and stopping without
+   making unnecessary changes
 
 The script fails if the agent:
 
 - leaves the tests failing
 - leaves the target file incorrect
+- makes unnecessary edits in the already-done benchmark
 - asks optional confirmation-style questions in the final transcript instead of
   continuing autonomously
 

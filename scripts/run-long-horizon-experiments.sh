@@ -33,6 +33,14 @@ if ! command -v node >/dev/null 2>&1; then
   exit 5
 fi
 
+assert_no_optional_confirmation_language() {
+  local transcript_path="$1"
+  if grep -Eiq "(do you want me to continue|let me know if you want|waiting for your confirmation)" "$transcript_path"; then
+    echo "error: benchmark output shows optional confirmation-seeking behavior" >&2
+    exit 10
+  fi
+}
+
 run_python_fix_benchmark() {
   local workdir="$WORK_BASE/python-fix"
   rm -rf "$workdir"
@@ -81,10 +89,7 @@ PY
   python3 -m pytest -q > after.txt 2>&1
 
   grep -q "3 passed" after.txt
-  if grep -Eiq "(do you want me to continue|let me know if you want|waiting for your confirmation)" codex-output.txt; then
-    echo "error: benchmark output shows optional confirmation-seeking behavior" >&2
-    exit 10
-  fi
+  assert_no_optional_confirmation_language codex-output.txt
 
   cat > result.json <<JSON
 {
@@ -127,10 +132,7 @@ TXT
     > codex-output.txt 2>&1
 
   grep -qx 'finished' todo.txt
-  if grep -Eiq "(do you want me to continue|let me know if you want|waiting for your confirmation)" codex-output.txt; then
-    echo "error: benchmark output shows optional confirmation-seeking behavior" >&2
-    exit 11
-  fi
+  assert_no_optional_confirmation_language codex-output.txt
 
   cat > result.json <<JSON
 {
@@ -146,9 +148,124 @@ PY
 JSON
 }
 
+run_multi_tool_benchmark() {
+  local workdir="$WORK_BASE/multi-tool"
+  rm -rf "$workdir"
+  mkdir -p "$workdir"
+  cd "$workdir"
+
+  cat > notes.txt <<'TXT'
+before
+TXT
+
+  git init >/dev/null
+  git config user.name test
+  git config user.email test@example.com
+  git add notes.txt
+  git commit -m 'baseline notes' >/dev/null
+
+  CODEX_HOME="$CODEX_HOME_DIR" "$CODEX_BIN" exec \
+    "You are in execute mode. Update notes.txt so it contains only the line 'after'. Verify the final contents with a shell command. Do not ask for confirmation and stop only when the task is complete." \
+    > codex-output.txt 2>&1
+
+  grep -qx 'after' notes.txt
+  assert_no_optional_confirmation_language codex-output.txt
+
+  cat > result.json <<JSON
+{
+  "name": "multi_tool",
+  "workdir": "$workdir",
+  "notes": $(python3 - <<'PY'
+import json
+from pathlib import Path
+print(json.dumps(Path('notes.txt').read_text()))
+PY
+)
+}
+JSON
+}
+
+run_already_done_benchmark() {
+  local workdir="$WORK_BASE/already-done"
+  rm -rf "$workdir"
+  mkdir -p "$workdir"
+  cd "$workdir"
+
+  cat > calculator.py <<'PY'
+def add(a, b):
+    return a + b
+
+
+def safe_div(a, b):
+    if b == 0:
+        return None
+    return a / b
+PY
+
+  cat > test_calculator.py <<'PY'
+from calculator import add, safe_div
+
+
+def test_add():
+    assert add(2, 3) == 5
+
+
+def test_safe_div():
+    assert safe_div(9, 3) == 3
+
+
+def test_safe_div_zero():
+    assert safe_div(9, 0) is None
+PY
+
+  git init >/dev/null
+  git config user.name test
+  git config user.email test@example.com
+  git add calculator.py test_calculator.py
+  git commit -m 'baseline already green' >/dev/null
+
+  python3 -m pytest -q > before.txt 2>&1
+
+  CODEX_HOME="$CODEX_HOME_DIR" "$CODEX_BIN" exec \
+    "You are in execute mode. Verify that this repository already satisfies the tests. Do not make unnecessary changes. Stop once you have verified completion." \
+    > codex-output.txt 2>&1
+
+  python3 -m pytest -q > after.txt 2>&1
+  grep -q '3 passed' after.txt
+  if ! git diff --quiet; then
+    echo "error: already-done benchmark produced unnecessary changes" >&2
+    git diff >&2
+    exit 12
+  fi
+  assert_no_optional_confirmation_language codex-output.txt
+
+  cat > result.json <<JSON
+{
+  "name": "already_done",
+  "workdir": "$workdir",
+  "baseline": $(python3 - <<'PY'
+import json
+from pathlib import Path
+print(json.dumps(Path('before.txt').read_text()))
+PY
+),
+  "final": $(python3 - <<'PY'
+import json
+from pathlib import Path
+print(json.dumps(Path('after.txt').read_text()))
+PY
+)
+}
+JSON
+}
+
 run_python_fix_benchmark
 run_marked_completion_benchmark
+run_multi_tool_benchmark
+run_already_done_benchmark
 
 printf 'Completed long-horizon experiments under %s\n' "$WORK_BASE"
 printf ' - %s\n' "$WORK_BASE/python-fix/result.json"
 printf ' - %s\n' "$WORK_BASE/marked-completion/result.json"
+printf ' - %s\n' "$WORK_BASE/multi-tool/result.json"
+printf ' - %s\n' "$WORK_BASE/already-done/result.json"
