@@ -456,22 +456,27 @@ PY
 }
 
 run_python_fix_benchmark_wrapper() {
+  mkdir -p "$WORK_BASE/python-fix"
   run_python_fix_benchmark 2> "$WORK_BASE/python-fix/error.txt"
 }
 
 run_marked_completion_benchmark_wrapper() {
+  mkdir -p "$WORK_BASE/marked-completion"
   run_marked_completion_benchmark 2> "$WORK_BASE/marked-completion/error.txt"
 }
 
 run_multi_tool_benchmark_wrapper() {
+  mkdir -p "$WORK_BASE/multi-tool"
   run_multi_tool_benchmark 2> "$WORK_BASE/multi-tool/error.txt"
 }
 
 run_already_done_benchmark_wrapper() {
+  mkdir -p "$WORK_BASE/already-done"
   run_already_done_benchmark 2> "$WORK_BASE/already-done/error.txt"
 }
 
 run_dual_fix_benchmark_wrapper() {
+  mkdir -p "$WORK_BASE/dual-fix"
   run_dual_fix_benchmark 2> "$WORK_BASE/dual-fix/error.txt"
 }
 

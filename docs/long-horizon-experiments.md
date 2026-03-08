@@ -78,6 +78,19 @@ For a quick trend report over the accumulated history, run:
 
 You can also point it at a custom history file path.
 
+## Soak runs
+
+For repeated end-to-end runs against the real benchmark suite, use:
+
+- `scripts/run-long-horizon-soak.sh`
+
+By default it runs the benchmark suite 3 times and writes:
+
+- `/tmp/long-horizon-soak/soak-history.jsonl`
+- `/tmp/long-horizon-soak/soak-summary.md`
+
+Override `RUNS` if you want a shorter or longer soak cycle.
+
 When a previous run exists, `summary.md` also includes a small “Delta Vs Previous
 Run” section for the aggregate metrics so regressions are visible at a glance.
 
