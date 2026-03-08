@@ -82,6 +82,7 @@ async fn run_js_repl_turn(
             .expect("test config should allow feature update");
     });
     let test = builder.build(server).await?;
+    assert!(test.config.features.enabled(Feature::JsRepl));
 
     let mut first_events = vec![ev_response_created("resp-1")];
     for (call_id, js_input) in calls {

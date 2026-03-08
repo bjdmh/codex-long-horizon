@@ -238,6 +238,7 @@ fn shell_event_with_prefix_rule(
     let mut args = json!({
         "command": command,
         "timeout_ms": timeout_ms,
+        "login": false,
     });
     if sandbox_permissions.requires_additional_permissions() {
         args["sandbox_permissions"] = json!(sandbox_permissions);

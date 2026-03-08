@@ -142,12 +142,26 @@ pub fn fetch_dotslash_file(
 /// temporary directory. Using a per-test directory keeps tests hermetic and
 /// avoids clobbering a developer’s real `~/.codex`.
 pub async fn load_default_config_for_test(codex_home: &TempDir) -> Config {
-    ConfigBuilder::default()
+    let mut config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(default_test_overrides())
         .build()
         .await
-        .expect("defaults for test should always succeed")
+        .expect("defaults for test should always succeed");
+
+    if config.js_repl_node_path.is_none()
+        && let Some(path_var) = std::env::var_os("PATH")
+    {
+        for dir in std::env::split_paths(&path_var) {
+            let node_path = dir.join("node");
+            if node_path.is_file() {
+                config.js_repl_node_path = Some(node_path);
+                break;
+            }
+        }
+    }
+
+    config
 }
 
 #[cfg(target_os = "linux")]
