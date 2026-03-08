@@ -315,10 +315,65 @@ PY
   append_summary "already_done" "passed" "Detected complete state without unnecessary edits"
 }
 
+run_dual_fix_benchmark() {
+  local workdir="$WORK_BASE/dual-fix"
+  rm -rf "$workdir"
+  mkdir -p "$workdir"
+  cd "$workdir"
+
+  cat > math_ops.py <<'PY'
+def mul(a, b):
+    return a + b
+
+
+def sub(a, b):
+    return a + b
+PY
+
+  cat > test_math_ops.py <<'PY'
+from math_ops import mul, sub
+
+
+def test_mul():
+    assert mul(3, 4) == 12
+
+
+def test_sub():
+    assert sub(7, 2) == 5
+PY
+
+  git init >/dev/null
+  git config user.name test
+  git config user.email test@example.com
+  git add math_ops.py test_math_ops.py
+  git commit -m 'baseline dual fix fixture' >/dev/null
+
+  python3 -m pytest -q > before.txt 2>&1 || true
+
+  local duration_secs
+  duration_secs=$(run_codex_exec \
+    "You are in execute mode. Fix all bugs so that the pytest suite passes. There are multiple independent defects. Do not ask for confirmation, keep going until everything is fixed, and stop only when the task is actually complete." \
+    codex-output.txt)
+
+  python3 -m pytest -q > after.txt 2>&1
+
+  grep -q "2 passed" after.txt
+  assert_no_optional_confirmation_language codex-output.txt
+  assert_transcript_shows_execution codex-output.txt
+
+  write_result_with_metrics \
+    result.json \
+    dual_fix \
+    "$(python3 -c 'import json, pathlib; print(json.dumps({"baseline": pathlib.Path("before.txt").read_text(), "final": pathlib.Path("after.txt").read_text()}))')" \
+    "$duration_secs"
+  append_summary "dual_fix" "passed" "Fixed multiple independent defects without waiting for input"
+}
+
 run_python_fix_benchmark
 run_marked_completion_benchmark
 run_multi_tool_benchmark
 run_already_done_benchmark
+run_dual_fix_benchmark
 
 python3 - <<PY > "$AGGREGATE_JSON"
 import json
@@ -330,6 +385,7 @@ results = [
     json.loads((base / 'marked-completion' / 'result.json').read_text()),
     json.loads((base / 'multi-tool' / 'result.json').read_text()),
     json.loads((base / 'already-done' / 'result.json').read_text()),
+    json.loads((base / 'dual-fix' / 'result.json').read_text()),
 ]
 aggregate = {
     'scenarios': results,
@@ -351,5 +407,6 @@ printf ' - %s\n' "$WORK_BASE/python-fix/result.json"
 printf ' - %s\n' "$WORK_BASE/marked-completion/result.json"
 printf ' - %s\n' "$WORK_BASE/multi-tool/result.json"
 printf ' - %s\n' "$WORK_BASE/already-done/result.json"
+printf ' - %s\n' "$WORK_BASE/dual-fix/result.json"
 printf ' - %s\n' "$SUMMARY_PATH"
 printf ' - %s\n' "$AGGREGATE_JSON"

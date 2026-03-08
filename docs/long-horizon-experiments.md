@@ -36,6 +36,8 @@ experiment profile:
 3. a multi-tool file task that requires editing and explicit shell verification
 4. an already-done task that requires verifying success and stopping without
    making unnecessary changes
+5. a dual-fix task that requires fixing multiple independent defects before
+   stopping
 
 The script fails if the agent:
 
