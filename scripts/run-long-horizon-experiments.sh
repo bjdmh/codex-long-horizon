@@ -6,6 +6,7 @@ CODEX_HOME_DIR=${CODEX_HOME_DIR:-/root/.paolu-codex-long-horizon}
 WORK_BASE=${WORK_BASE:-/tmp/long-horizon-bench}
 CODEX_BIN=${CODEX_BIN:-$ROOT_DIR/codex-rs/target/debug/codex}
 SUMMARY_PATH=${SUMMARY_PATH:-$WORK_BASE/summary.md}
+AGGREGATE_JSON=${AGGREGATE_JSON:-$WORK_BASE/summary.json}
 
 export GIT_TERMINAL_PROMPT=0
 
@@ -60,6 +61,48 @@ append_summary() {
   printf '| %s | %s | %s |\n' "$name" "$status" "$note" >> "$SUMMARY_PATH"
 }
 
+transcript_metric_count() {
+  local transcript_path="$1"
+  local pattern="$2"
+  grep -Eic "$pattern" "$transcript_path" || true
+}
+
+write_result_with_metrics() {
+  local result_path="$1"
+  local name="$2"
+  local extra_json="$3"
+  EXTRA_JSON="$extra_json" python3 - <<PY > "$result_path"
+import json
+import os
+from pathlib import Path
+
+transcript = Path('codex-output.txt').read_text()
+data = {
+    'name': ${name@Q},
+    'workdir': str(Path.cwd()),
+    'metrics': {
+        'exec_steps': sum(1 for line in transcript.splitlines() if line.strip() == 'exec'),
+        'apply_patch_steps': transcript.count('apply_patch('),
+        'file_updates': sum(1 for line in transcript.splitlines() if line.strip() == 'file update'),
+        'plan_updates': sum(1 for line in transcript.splitlines() if line.strip() == 'Plan update'),
+        'thinking_blocks': sum(1 for line in transcript.splitlines() if line.strip() == 'thinking'),
+        'optional_confirmation_hits': sum(
+            1
+            for needle in [
+                'do you want me to continue',
+                'let me know if you want',
+                'waiting for your confirmation',
+            ]
+            if needle in transcript.lower()
+        ),
+    },
+}
+extra = json.loads(os.environ['EXTRA_JSON'])
+data.update(extra)
+print(json.dumps(data, indent=2, ensure_ascii=False))
+PY
+}
+
 run_python_fix_benchmark() {
   local workdir="$WORK_BASE/python-fix"
   rm -rf "$workdir"
@@ -111,24 +154,10 @@ PY
   assert_no_optional_confirmation_language codex-output.txt
   assert_transcript_shows_execution codex-output.txt
 
-  cat > result.json <<JSON
-{
-  "name": "python_fix",
-  "workdir": "$workdir",
-  "baseline": $(python3 - <<'PY'
-import json
-from pathlib import Path
-print(json.dumps(Path('before.txt').read_text()))
-PY
-),
-  "final": $(python3 - <<'PY'
-import json
-from pathlib import Path
-print(json.dumps(Path('after.txt').read_text()))
-PY
-)
-}
-JSON
+  write_result_with_metrics \
+    result.json \
+    python_fix \
+    "$(python3 -c 'import json, pathlib; print(json.dumps({"baseline": pathlib.Path("before.txt").read_text(), "final": pathlib.Path("after.txt").read_text()}))')"
   append_summary "python_fix" "passed" "Fixed failing pytest suite autonomously"
 }
 
@@ -156,18 +185,10 @@ TXT
   assert_no_optional_confirmation_language codex-output.txt
   assert_transcript_shows_execution codex-output.txt
 
-  cat > result.json <<JSON
-{
-  "name": "marked_completion",
-  "workdir": "$workdir",
-  "todo": $(python3 - <<'PY'
-import json
-from pathlib import Path
-print(json.dumps(Path('todo.txt').read_text()))
-PY
-)
-}
-JSON
+  write_result_with_metrics \
+    result.json \
+    marked_completion \
+    "$(python3 -c 'import json, pathlib; print(json.dumps({"todo": pathlib.Path("todo.txt").read_text()}))')"
   append_summary "marked_completion" "passed" "Edited target file and stopped after verification"
 }
 
@@ -195,18 +216,10 @@ TXT
   assert_no_optional_confirmation_language codex-output.txt
   assert_transcript_shows_execution codex-output.txt
 
-  cat > result.json <<JSON
-{
-  "name": "multi_tool",
-  "workdir": "$workdir",
-  "notes": $(python3 - <<'PY'
-import json
-from pathlib import Path
-print(json.dumps(Path('notes.txt').read_text()))
-PY
-)
-}
-JSON
+  write_result_with_metrics \
+    result.json \
+    multi_tool \
+    "$(python3 -c 'import json, pathlib; print(json.dumps({"notes": pathlib.Path("notes.txt").read_text()}))')"
   append_summary "multi_tool" "passed" "Completed multi-tool workflow without confirmation"
 }
 
@@ -265,24 +278,10 @@ PY
   assert_no_optional_confirmation_language codex-output.txt
   assert_transcript_shows_execution codex-output.txt
 
-  cat > result.json <<JSON
-{
-  "name": "already_done",
-  "workdir": "$workdir",
-  "baseline": $(python3 - <<'PY'
-import json
-from pathlib import Path
-print(json.dumps(Path('before.txt').read_text()))
-PY
-),
-  "final": $(python3 - <<'PY'
-import json
-from pathlib import Path
-print(json.dumps(Path('after.txt').read_text()))
-PY
-)
-}
-JSON
+  write_result_with_metrics \
+    result.json \
+    already_done \
+    "$(python3 -c 'import json, pathlib; print(json.dumps({"baseline": pathlib.Path("before.txt").read_text(), "final": pathlib.Path("after.txt").read_text()}))')"
   append_summary "already_done" "passed" "Detected complete state without unnecessary edits"
 }
 
@@ -291,9 +290,35 @@ run_marked_completion_benchmark
 run_multi_tool_benchmark
 run_already_done_benchmark
 
+python3 - <<PY > "$AGGREGATE_JSON"
+import json
+from pathlib import Path
+
+base = Path(${WORK_BASE@Q})
+results = [
+    json.loads((base / 'python-fix' / 'result.json').read_text()),
+    json.loads((base / 'marked-completion' / 'result.json').read_text()),
+    json.loads((base / 'multi-tool' / 'result.json').read_text()),
+    json.loads((base / 'already-done' / 'result.json').read_text()),
+]
+aggregate = {
+    'scenarios': results,
+    'totals': {
+        'exec_steps': sum(item['metrics']['exec_steps'] for item in results),
+        'apply_patch_steps': sum(item['metrics']['apply_patch_steps'] for item in results),
+        'file_updates': sum(item['metrics']['file_updates'] for item in results),
+        'plan_updates': sum(item['metrics']['plan_updates'] for item in results),
+        'thinking_blocks': sum(item['metrics']['thinking_blocks'] for item in results),
+        'optional_confirmation_hits': sum(item['metrics']['optional_confirmation_hits'] for item in results),
+    },
+}
+print(json.dumps(aggregate, indent=2, ensure_ascii=False))
+PY
+
 printf 'Completed long-horizon experiments under %s\n' "$WORK_BASE"
 printf ' - %s\n' "$WORK_BASE/python-fix/result.json"
 printf ' - %s\n' "$WORK_BASE/marked-completion/result.json"
 printf ' - %s\n' "$WORK_BASE/multi-tool/result.json"
 printf ' - %s\n' "$WORK_BASE/already-done/result.json"
 printf ' - %s\n' "$SUMMARY_PATH"
+printf ' - %s\n' "$AGGREGATE_JSON"

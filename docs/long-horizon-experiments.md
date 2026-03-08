@@ -55,3 +55,11 @@ The benchmark also writes a compact Markdown summary to:
 
 Use that file when you want a quick pass/fail overview without opening each
 per-scenario JSON file.
+
+For machine-readable trend tracking it also writes:
+
+- `/tmp/long-horizon-bench/summary.json`
+
+That aggregate file includes per-scenario metrics such as the number of exec
+steps, patch applications, file updates, plan updates, and any optional
+confirmation-style phrases detected in the transcript.
