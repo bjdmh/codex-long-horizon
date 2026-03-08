@@ -45,6 +45,14 @@ assert_no_optional_confirmation_language() {
   fi
 }
 
+assert_transcript_shows_execution() {
+  local transcript_path="$1"
+  if ! grep -Eiq "(^exec$|^apply_patch\(|^file update$|^Plan update$|^thinking$)" "$transcript_path"; then
+    echo "error: benchmark transcript did not show evidence of autonomous execution steps" >&2
+    exit 13
+  fi
+}
+
 append_summary() {
   local name="$1"
   local status="$2"
@@ -101,6 +109,7 @@ PY
 
   grep -q "3 passed" after.txt
   assert_no_optional_confirmation_language codex-output.txt
+  assert_transcript_shows_execution codex-output.txt
 
   cat > result.json <<JSON
 {
@@ -145,6 +154,7 @@ TXT
 
   grep -qx 'finished' todo.txt
   assert_no_optional_confirmation_language codex-output.txt
+  assert_transcript_shows_execution codex-output.txt
 
   cat > result.json <<JSON
 {
@@ -183,6 +193,7 @@ TXT
 
   grep -qx 'after' notes.txt
   assert_no_optional_confirmation_language codex-output.txt
+  assert_transcript_shows_execution codex-output.txt
 
   cat > result.json <<JSON
 {
@@ -252,6 +263,7 @@ PY
     exit 12
   fi
   assert_no_optional_confirmation_language codex-output.txt
+  assert_transcript_shows_execution codex-output.txt
 
   cat > result.json <<JSON
 {
