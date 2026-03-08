@@ -22,8 +22,8 @@ fi
 
 mkdir -p "$WORK_BASE"
 printf '# Long-Horizon Benchmark Summary\n\n' > "$SUMMARY_PATH"
-printf '| Scenario | Status | Notes |\n' >> "$SUMMARY_PATH"
-printf '| --- | --- | --- |\n' >> "$SUMMARY_PATH"
+printf '| Scenario | Status | Duration (s) | Exec Steps | Apply Patch | Plan Updates | Optional Confirmations | Notes |\n' >> "$SUMMARY_PATH"
+printf '| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |\n' >> "$SUMMARY_PATH"
 
 if [ ! -x "$CODEX_BIN" ]; then
   (cd "$ROOT_DIR/codex-rs" && cargo build -p codex-cli --bin codex)
@@ -58,8 +58,14 @@ assert_transcript_shows_execution() {
 append_summary() {
   local name="$1"
   local status="$2"
-  local note="$3"
-  printf '| %s | %s | %s |\n' "$name" "$status" "$note" >> "$SUMMARY_PATH"
+  local duration_secs="$3"
+  local exec_steps="$4"
+  local apply_patch_steps="$5"
+  local plan_updates="$6"
+  local confirmation_hits="$7"
+  local note="$8"
+  printf '| %s | %s | %s | %s | %s | %s | %s | %s |\n' \
+    "$name" "$status" "$duration_secs" "$exec_steps" "$apply_patch_steps" "$plan_updates" "$confirmation_hits" "$note" >> "$SUMMARY_PATH"
 }
 
 run_codex_exec() {
@@ -158,7 +164,7 @@ def test_safe_div_zero():
     assert safe_div(9, 0) is None
 PY
 
-  git init >/dev/null
+  git init -b main >/dev/null
   git config user.name test
   git config user.email test@example.com
   git add calculator.py test_calculator.py
@@ -182,7 +188,7 @@ PY
     python_fix \
     "$(python3 -c 'import json, pathlib; print(json.dumps({"baseline": pathlib.Path("before.txt").read_text(), "final": pathlib.Path("after.txt").read_text()}))')" \
     "$duration_secs"
-  append_summary "python_fix" "passed" "Fixed failing pytest suite autonomously"
+  append_summary "python_fix" "passed" "$duration_secs" 0 0 0 0 "Fixed failing pytest suite autonomously"
 }
 
 run_marked_completion_benchmark() {
@@ -195,7 +201,7 @@ run_marked_completion_benchmark() {
 replace me
 TXT
 
-  git init >/dev/null
+  git init -b main >/dev/null
   git config user.name test
   git config user.email test@example.com
   git add todo.txt
@@ -215,7 +221,7 @@ TXT
     marked_completion \
     "$(python3 -c 'import json, pathlib; print(json.dumps({"todo": pathlib.Path("todo.txt").read_text()}))')" \
     "$duration_secs"
-  append_summary "marked_completion" "passed" "Edited target file and stopped after verification"
+  append_summary "marked_completion" "passed" "$duration_secs" 0 0 0 0 "Edited target file and stopped after verification"
 }
 
 run_multi_tool_benchmark() {
@@ -228,7 +234,7 @@ run_multi_tool_benchmark() {
 before
 TXT
 
-  git init >/dev/null
+  git init -b main >/dev/null
   git config user.name test
   git config user.email test@example.com
   git add notes.txt
@@ -248,7 +254,7 @@ TXT
     multi_tool \
     "$(python3 -c 'import json, pathlib; print(json.dumps({"notes": pathlib.Path("notes.txt").read_text()}))')" \
     "$duration_secs"
-  append_summary "multi_tool" "passed" "Completed multi-tool workflow without confirmation"
+  append_summary "multi_tool" "passed" "$duration_secs" 0 0 0 0 "Completed multi-tool workflow without confirmation"
 }
 
 run_already_done_benchmark() {
@@ -284,7 +290,7 @@ def test_safe_div_zero():
     assert safe_div(9, 0) is None
 PY
 
-  git init >/dev/null
+  git init -b main >/dev/null
   git config user.name test
   git config user.email test@example.com
   git add calculator.py test_calculator.py
@@ -312,7 +318,7 @@ PY
     already_done \
     "$(python3 -c 'import json, pathlib; print(json.dumps({"baseline": pathlib.Path("before.txt").read_text(), "final": pathlib.Path("after.txt").read_text()}))')" \
     "$duration_secs"
-  append_summary "already_done" "passed" "Detected complete state without unnecessary edits"
+  append_summary "already_done" "passed" "$duration_secs" 0 0 0 0 "Detected complete state without unnecessary edits"
 }
 
 run_dual_fix_benchmark() {
@@ -342,7 +348,7 @@ def test_sub():
     assert sub(7, 2) == 5
 PY
 
-  git init >/dev/null
+  git init -b main >/dev/null
   git config user.name test
   git config user.email test@example.com
   git add math_ops.py test_math_ops.py
@@ -366,7 +372,7 @@ PY
     dual_fix \
     "$(python3 -c 'import json, pathlib; print(json.dumps({"baseline": pathlib.Path("before.txt").read_text(), "final": pathlib.Path("after.txt").read_text()}))')" \
     "$duration_secs"
-  append_summary "dual_fix" "passed" "Fixed multiple independent defects without waiting for input"
+  append_summary "dual_fix" "passed" "$duration_secs" 0 0 0 0 "Fixed multiple independent defects without waiting for input"
 }
 
 run_python_fix_benchmark
@@ -400,6 +406,40 @@ aggregate = {
     },
 }
 print(json.dumps(aggregate, indent=2, ensure_ascii=False))
+PY
+
+python3 - <<PY
+import json
+from pathlib import Path
+
+summary_path = Path(${SUMMARY_PATH@Q})
+aggregate = json.loads(Path(${AGGREGATE_JSON@Q}).read_text())
+rows = [
+    '| Scenario | Status | Duration (s) | Exec Steps | Apply Patch | Plan Updates | Optional Confirmations | Notes |',
+    '| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |',
+]
+notes = {
+    'python_fix': 'Fixed failing pytest suite autonomously',
+    'marked_completion': 'Edited target file and stopped after verification',
+    'multi_tool': 'Completed multi-tool workflow without confirmation',
+    'already_done': 'Detected complete state without unnecessary edits',
+    'dual_fix': 'Fixed multiple independent defects without waiting for input',
+}
+for scenario in aggregate['scenarios']:
+    metrics = scenario['metrics']
+    rows.append(
+        f"| {scenario['name']} | passed | {scenario['duration_secs']} | {metrics['exec_steps']} | {metrics['apply_patch_steps']} | {metrics['plan_updates']} | {metrics['optional_confirmation_hits']} | {notes.get(scenario['name'], '')} |"
+    )
+rows.append('')
+rows.append('## Totals')
+rows.append('')
+totals = aggregate['totals']
+rows.append(f"- Duration: {totals['duration_secs']}s")
+rows.append(f"- Exec steps: {totals['exec_steps']}")
+rows.append(f"- Apply patch steps: {totals['apply_patch_steps']}")
+rows.append(f"- Plan updates: {totals['plan_updates']}")
+rows.append(f"- Optional confirmations: {totals['optional_confirmation_hits']}")
+summary_path.write_text('\n'.join(rows) + '\n')
 PY
 
 printf 'Completed long-horizon experiments under %s\n' "$WORK_BASE"

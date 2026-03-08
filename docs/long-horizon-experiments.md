@@ -55,8 +55,8 @@ The benchmark also writes a compact Markdown summary to:
 
 - `/tmp/long-horizon-bench/summary.md`
 
-Use that file when you want a quick pass/fail overview without opening each
-per-scenario JSON file.
+Use that file when you want a quick pass/fail overview, plus per-scenario
+duration and execution-step counts, without opening each per-scenario JSON file.
 
 For machine-readable trend tracking it also writes:
 
