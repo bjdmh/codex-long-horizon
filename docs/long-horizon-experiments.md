@@ -26,7 +26,7 @@ Use:
 
 - `scripts/run-long-horizon-experiments.sh`
 
-The script runs two real Execute-mode tasks with the configured `CODEX_HOME`
+The script runs four real Execute-mode tasks with the configured `CODEX_HOME`
 experiment profile:
 
 1. a Python bug-fix task that requires reproducing failing tests, editing code,
@@ -62,4 +62,5 @@ For machine-readable trend tracking it also writes:
 
 That aggregate file includes per-scenario metrics such as the number of exec
 steps, patch applications, file updates, plan updates, and any optional
-confirmation-style phrases detected in the transcript.
+confirmation-style phrases detected in the transcript. It also records wall
+clock duration for each scenario and the aggregate total.

@@ -7,6 +7,7 @@ WORK_BASE=${WORK_BASE:-/tmp/long-horizon-bench}
 CODEX_BIN=${CODEX_BIN:-$ROOT_DIR/codex-rs/target/debug/codex}
 SUMMARY_PATH=${SUMMARY_PATH:-$WORK_BASE/summary.md}
 AGGREGATE_JSON=${AGGREGATE_JSON:-$WORK_BASE/summary.json}
+BENCHMARK_TIMEOUT_SECS=${BENCHMARK_TIMEOUT_SECS:-600}
 
 export GIT_TERMINAL_PROMPT=0
 
@@ -61,6 +62,25 @@ append_summary() {
   printf '| %s | %s | %s |\n' "$name" "$status" "$note" >> "$SUMMARY_PATH"
 }
 
+run_codex_exec() {
+  local prompt="$1"
+  local transcript_path="$2"
+  local started_at finished_at duration exit_code
+  started_at=$(date +%s)
+  set +e
+  timeout "${BENCHMARK_TIMEOUT_SECS}s" env CODEX_HOME="$CODEX_HOME_DIR" "$CODEX_BIN" exec "$prompt" > "$transcript_path" 2>&1
+  exit_code=$?
+  set -e
+  finished_at=$(date +%s)
+  duration=$((finished_at - started_at))
+  if [ "$exit_code" -ne 0 ]; then
+    echo "error: codex exec failed with exit code $exit_code after ${duration}s" >&2
+    tail -n 200 "$transcript_path" >&2 || true
+    exit "$exit_code"
+  fi
+  printf '%s' "$duration"
+}
+
 transcript_metric_count() {
   local transcript_path="$1"
   local pattern="$2"
@@ -71,7 +91,8 @@ write_result_with_metrics() {
   local result_path="$1"
   local name="$2"
   local extra_json="$3"
-  EXTRA_JSON="$extra_json" python3 - <<PY > "$result_path"
+  local duration_secs="$4"
+  EXTRA_JSON="$extra_json" DURATION_SECS="$duration_secs" python3 - <<PY > "$result_path"
 import json
 import os
 from pathlib import Path
@@ -80,6 +101,7 @@ transcript = Path('codex-output.txt').read_text()
 data = {
     'name': ${name@Q},
     'workdir': str(Path.cwd()),
+    'duration_secs': int(os.environ['DURATION_SECS']),
     'metrics': {
         'exec_steps': sum(1 for line in transcript.splitlines() if line.strip() == 'exec'),
         'apply_patch_steps': transcript.count('apply_patch('),
@@ -144,9 +166,10 @@ PY
 
   python3 -m pytest -q > before.txt 2>&1 || true
 
-  CODEX_HOME="$CODEX_HOME_DIR" "$CODEX_BIN" exec \
+  local duration_secs
+  duration_secs=$(run_codex_exec \
     "You are in execute mode. Fix the Python code so that all pytest tests pass. Do not ask me for confirmation. Decide the next steps yourself, run the necessary commands, and stop only when the task is actually complete." \
-    > codex-output.txt 2>&1
+    codex-output.txt)
 
   python3 -m pytest -q > after.txt 2>&1
 
@@ -157,7 +180,8 @@ PY
   write_result_with_metrics \
     result.json \
     python_fix \
-    "$(python3 -c 'import json, pathlib; print(json.dumps({"baseline": pathlib.Path("before.txt").read_text(), "final": pathlib.Path("after.txt").read_text()}))')"
+    "$(python3 -c 'import json, pathlib; print(json.dumps({"baseline": pathlib.Path("before.txt").read_text(), "final": pathlib.Path("after.txt").read_text()}))')" \
+    "$duration_secs"
   append_summary "python_fix" "passed" "Fixed failing pytest suite autonomously"
 }
 
@@ -177,9 +201,10 @@ TXT
   git add todo.txt
   git commit -m 'baseline todo' >/dev/null
 
-  CODEX_HOME="$CODEX_HOME_DIR" "$CODEX_BIN" exec \
+  local duration_secs
+  duration_secs=$(run_codex_exec \
     "You are in execute mode. Replace the contents of todo.txt with the single line 'finished'. Verify the file contents after editing. Do not ask for confirmation and stop only when the task is complete." \
-    > codex-output.txt 2>&1
+    codex-output.txt)
 
   grep -qx 'finished' todo.txt
   assert_no_optional_confirmation_language codex-output.txt
@@ -188,7 +213,8 @@ TXT
   write_result_with_metrics \
     result.json \
     marked_completion \
-    "$(python3 -c 'import json, pathlib; print(json.dumps({"todo": pathlib.Path("todo.txt").read_text()}))')"
+    "$(python3 -c 'import json, pathlib; print(json.dumps({"todo": pathlib.Path("todo.txt").read_text()}))')" \
+    "$duration_secs"
   append_summary "marked_completion" "passed" "Edited target file and stopped after verification"
 }
 
@@ -208,9 +234,10 @@ TXT
   git add notes.txt
   git commit -m 'baseline notes' >/dev/null
 
-  CODEX_HOME="$CODEX_HOME_DIR" "$CODEX_BIN" exec \
+  local duration_secs
+  duration_secs=$(run_codex_exec \
     "You are in execute mode. Update notes.txt so it contains only the line 'after'. Verify the final contents with a shell command. Do not ask for confirmation and stop only when the task is complete." \
-    > codex-output.txt 2>&1
+    codex-output.txt)
 
   grep -qx 'after' notes.txt
   assert_no_optional_confirmation_language codex-output.txt
@@ -219,7 +246,8 @@ TXT
   write_result_with_metrics \
     result.json \
     multi_tool \
-    "$(python3 -c 'import json, pathlib; print(json.dumps({"notes": pathlib.Path("notes.txt").read_text()}))')"
+    "$(python3 -c 'import json, pathlib; print(json.dumps({"notes": pathlib.Path("notes.txt").read_text()}))')" \
+    "$duration_secs"
   append_summary "multi_tool" "passed" "Completed multi-tool workflow without confirmation"
 }
 
@@ -264,9 +292,10 @@ PY
 
   python3 -m pytest -q > before.txt 2>&1
 
-  CODEX_HOME="$CODEX_HOME_DIR" "$CODEX_BIN" exec \
+  local duration_secs
+  duration_secs=$(run_codex_exec \
     "You are in execute mode. Verify that this repository already satisfies the tests. Do not make unnecessary changes. Stop once you have verified completion." \
-    > codex-output.txt 2>&1
+    codex-output.txt)
 
   python3 -m pytest -q > after.txt 2>&1
   grep -q '3 passed' after.txt
@@ -281,7 +310,8 @@ PY
   write_result_with_metrics \
     result.json \
     already_done \
-    "$(python3 -c 'import json, pathlib; print(json.dumps({"baseline": pathlib.Path("before.txt").read_text(), "final": pathlib.Path("after.txt").read_text()}))')"
+    "$(python3 -c 'import json, pathlib; print(json.dumps({"baseline": pathlib.Path("before.txt").read_text(), "final": pathlib.Path("after.txt").read_text()}))')" \
+    "$duration_secs"
   append_summary "already_done" "passed" "Detected complete state without unnecessary edits"
 }
 
@@ -310,6 +340,7 @@ aggregate = {
         'plan_updates': sum(item['metrics']['plan_updates'] for item in results),
         'thinking_blocks': sum(item['metrics']['thinking_blocks'] for item in results),
         'optional_confirmation_hits': sum(item['metrics']['optional_confirmation_hits'] for item in results),
+        'duration_secs': sum(item['duration_secs'] for item in results),
     },
 }
 print(json.dumps(aggregate, indent=2, ensure_ascii=False))
