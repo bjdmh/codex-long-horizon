@@ -3055,7 +3055,7 @@ impl ChatWidget {
         };
         // Collaboration modes start in Default mode.
         let current_collaboration_mode = CollaborationMode {
-            mode: ModeKind::Default,
+            mode: config.initial_collaboration_mode,
             settings: fallback_default,
         };
 
@@ -3237,7 +3237,7 @@ impl ChatWidget {
         };
         // Collaboration modes start in Default mode.
         let current_collaboration_mode = CollaborationMode {
-            mode: ModeKind::Default,
+            mode: config.initial_collaboration_mode,
             settings: fallback_default,
         };
 
@@ -3414,7 +3414,7 @@ impl ChatWidget {
         };
         // Collaboration modes start in Default mode.
         let current_collaboration_mode = CollaborationMode {
-            mode: ModeKind::Default,
+            mode: config.initial_collaboration_mode,
             settings: fallback_default,
         };
 
@@ -7387,11 +7387,13 @@ impl ChatWidget {
     }
 
     fn initial_collaboration_mask(
-        _config: &Config,
+        config: &Config,
         models_manager: &ModelsManager,
         model_override: Option<&str>,
     ) -> Option<CollaborationModeMask> {
-        let mut mask = collaboration_modes::default_mask(models_manager)?;
+        let mut mask =
+            collaboration_modes::mask_for_kind(models_manager, config.initial_collaboration_mode)
+                .or_else(|| collaboration_modes::default_mask(models_manager))?;
         if let Some(model_override) = model_override {
             mask.model = Some(model_override.to_string());
         }

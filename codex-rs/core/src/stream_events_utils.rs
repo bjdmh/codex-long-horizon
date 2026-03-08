@@ -25,12 +25,56 @@ use futures::Future;
 use tracing::debug;
 use tracing::instrument;
 
-fn strip_hidden_assistant_markup(text: &str, plan_mode: bool) -> String {
+pub(crate) const TASK_COMPLETE_OPEN_TAG: &str = "<task_complete>";
+pub(crate) const TASK_COMPLETE_CLOSE_TAG: &str = "</task_complete>";
+pub(crate) const AWAIT_USER_INPUT_OPEN_TAG: &str = "<await_user_input>";
+pub(crate) const AWAIT_USER_INPUT_CLOSE_TAG: &str = "</await_user_input>";
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum AssistantControlSignal {
+    #[default]
+    Continue,
+    AwaitUserInput,
+    TaskComplete,
+}
+
+pub(crate) fn execute_mode_auto_continue_message(attempt: usize) -> String {
+    format!(
+        "Continue executing the current task autonomously. This is execute-mode auto-continuation #{attempt}. Do not stop for a status update or optional next step. Only end the turn if the task is complete and you include {TASK_COMPLETE_OPEN_TAG}...{TASK_COMPLETE_CLOSE_TAG}, or if you are blocked on information only the user can provide and you include {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG}."
+    )
+}
+
+fn assistant_control_signal_from_text(text: &str, mode: ModeKind) -> AssistantControlSignal {
+    if mode != ModeKind::Execute {
+        return AssistantControlSignal::Continue;
+    }
+    if text.contains(AWAIT_USER_INPUT_OPEN_TAG) {
+        return AssistantControlSignal::AwaitUserInput;
+    }
+    if text.contains(TASK_COMPLETE_OPEN_TAG) {
+        return AssistantControlSignal::TaskComplete;
+    }
+    AssistantControlSignal::Continue
+}
+
+fn strip_execute_control_tags(text: &str) -> String {
+    text.replace(TASK_COMPLETE_OPEN_TAG, "")
+        .replace(TASK_COMPLETE_CLOSE_TAG, "")
+        .replace(AWAIT_USER_INPUT_OPEN_TAG, "")
+        .replace(AWAIT_USER_INPUT_CLOSE_TAG, "")
+}
+
+fn strip_hidden_assistant_markup(text: &str, mode: ModeKind) -> String {
     let (without_citations, _) = strip_citations(text);
-    if plan_mode {
+    let without_plan = if mode == ModeKind::Plan {
         strip_proposed_plan_blocks(&without_citations)
     } else {
         without_citations
+    };
+    if mode == ModeKind::Execute {
+        strip_execute_control_tags(&without_plan)
+    } else {
+        without_plan
     }
 }
 
@@ -111,6 +155,7 @@ pub(crate) type InFlightFuture<'f> =
 #[derive(Default)]
 pub(crate) struct OutputItemResult {
     pub last_agent_message: Option<String>,
+    pub assistant_control_signal: AssistantControlSignal,
     pub needs_follow_up: bool,
     pub tool_future: Option<InFlightFuture<'static>>,
 }
@@ -129,7 +174,7 @@ pub(crate) async fn handle_output_item_done(
     previously_active_item: Option<TurnItem>,
 ) -> Result<OutputItemResult> {
     let mut output = OutputItemResult::default();
-    let plan_mode = ctx.turn_context.collaboration_mode.mode == ModeKind::Plan;
+    let mode = ctx.turn_context.collaboration_mode.mode;
 
     match ToolRouter::build_tool_call(ctx.sess.as_ref(), item.clone()).await {
         // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
@@ -157,7 +202,7 @@ pub(crate) async fn handle_output_item_done(
         }
         // No tool call: convert messages/reasoning into turn items and mark them as complete.
         Ok(None) => {
-            if let Some(turn_item) = handle_non_tool_response_item(&item, plan_mode) {
+            if let Some(turn_item) = handle_non_tool_response_item(&item, mode) {
                 if previously_active_item.is_none() {
                     let mut started_item = turn_item.clone();
                     if let TurnItem::ImageGeneration(item) = &mut started_item {
@@ -177,7 +222,11 @@ pub(crate) async fn handle_output_item_done(
 
             record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
                 .await;
-            let last_agent_message = last_assistant_message_from_item(&item, plan_mode);
+            if let Some(raw_text) = raw_assistant_output_text_from_item(&item) {
+                output.assistant_control_signal =
+                    assistant_control_signal_from_text(&raw_text, mode);
+            }
+            let last_agent_message = last_assistant_message_from_item(&item, mode);
 
             output.last_agent_message = last_agent_message;
         }
@@ -242,7 +291,7 @@ pub(crate) async fn handle_output_item_done(
 
 pub(crate) fn handle_non_tool_response_item(
     item: &ResponseItem,
-    plan_mode: bool,
+    mode: ModeKind,
 ) -> Option<TurnItem> {
     debug!(?item, "Output item");
 
@@ -260,7 +309,7 @@ pub(crate) fn handle_non_tool_response_item(
                         codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
                     })
                     .collect::<String>();
-                let stripped = strip_hidden_assistant_markup(&combined, plan_mode);
+                let stripped = strip_hidden_assistant_markup(&combined, mode);
                 agent_message.content =
                     vec![codex_protocol::items::AgentMessageContent::Text { text: stripped }];
             }
@@ -276,13 +325,13 @@ pub(crate) fn handle_non_tool_response_item(
 
 pub(crate) fn last_assistant_message_from_item(
     item: &ResponseItem,
-    plan_mode: bool,
+    mode: ModeKind,
 ) -> Option<String> {
     if let Some(combined) = raw_assistant_output_text_from_item(item) {
         if combined.is_empty() {
             return None;
         }
-        let stripped = strip_hidden_assistant_markup(&combined, plan_mode);
+        let stripped = strip_hidden_assistant_markup(&combined, mode);
         if stripped.trim().is_empty() {
             return None;
         }
@@ -324,8 +373,10 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
 
 #[cfg(test)]
 mod tests {
+    use super::AssistantControlSignal;
     use super::handle_non_tool_response_item;
     use super::last_assistant_message_from_item;
+    use codex_protocol::config_types::ModeKind;
     use codex_protocol::items::TurnItem;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
@@ -347,8 +398,8 @@ mod tests {
     fn handle_non_tool_response_item_strips_citations_from_assistant_message() {
         let item = assistant_output_text("hello<oai-mem-citation>doc1</oai-mem-citation> world");
 
-        let turn_item =
-            handle_non_tool_response_item(&item, false).expect("assistant message should parse");
+        let turn_item = handle_non_tool_response_item(&item, ModeKind::Default)
+            .expect("assistant message should parse");
 
         let TurnItem::AgentMessage(agent_message) = turn_item else {
             panic!("expected agent message");
@@ -369,7 +420,7 @@ mod tests {
             "before<oai-mem-citation>doc1</oai-mem-citation>\n<proposed_plan>\n- x\n</proposed_plan>\nafter",
         );
 
-        let message = last_assistant_message_from_item(&item, true)
+        let message = last_assistant_message_from_item(&item, ModeKind::Plan)
             .expect("assistant text should remain after stripping");
 
         assert_eq!(message, "before\nafter");
@@ -379,13 +430,47 @@ mod tests {
     fn last_assistant_message_from_item_returns_none_for_citation_only_message() {
         let item = assistant_output_text("<oai-mem-citation>doc1</oai-mem-citation>");
 
-        assert_eq!(last_assistant_message_from_item(&item, false), None);
+        assert_eq!(
+            last_assistant_message_from_item(&item, ModeKind::Default),
+            None
+        );
     }
 
     #[test]
     fn last_assistant_message_from_item_returns_none_for_plan_only_hidden_message() {
         let item = assistant_output_text("<proposed_plan>\n- x\n</proposed_plan>");
 
-        assert_eq!(last_assistant_message_from_item(&item, true), None);
+        assert_eq!(
+            last_assistant_message_from_item(&item, ModeKind::Plan),
+            None
+        );
+    }
+
+    #[test]
+    fn handle_non_tool_response_item_strips_execute_control_tags() {
+        let item = assistant_output_text("<task_complete>Done and verified.</task_complete>");
+
+        let turn_item = handle_non_tool_response_item(&item, ModeKind::Execute)
+            .expect("assistant message should parse");
+
+        let TurnItem::AgentMessage(agent_message) = turn_item else {
+            panic!("expected agent message");
+        };
+        let text = agent_message
+            .content
+            .iter()
+            .map(|entry| match entry {
+                codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
+            })
+            .collect::<String>();
+        assert_eq!(text, "Done and verified.");
+    }
+
+    #[test]
+    fn output_item_result_defaults_to_continue_control_signal() {
+        assert_eq!(
+            super::OutputItemResult::default().assistant_control_signal,
+            AssistantControlSignal::Continue
+        );
     }
 }

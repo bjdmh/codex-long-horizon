@@ -60,6 +60,7 @@ use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
@@ -289,7 +290,8 @@ pub struct Config {
     /// Persisted startup availability NUX state for model tooltips.
     pub model_availability_nux: ModelAvailabilityNuxConfig,
 
-    /// Start the TUI in the specified collaboration mode (plan/default).
+    /// Start new sessions in the specified collaboration mode.
+    pub initial_collaboration_mode: ModeKind,
 
     /// Controls whether the TUI uses the terminal's alternate screen buffer.
     ///
@@ -1062,6 +1064,9 @@ pub struct ConfigToml {
     /// Developer instructions inserted as a `developer` role message.
     #[serde(default)]
     pub developer_instructions: Option<String>,
+
+    /// Start new sessions in the specified collaboration mode.
+    pub initial_collaboration_mode: Option<ModeKind>,
 
     /// Optional path to a file containing model instructions that will override
     /// the built-in instructions for the selected model. Users are STRONGLY
@@ -2280,6 +2285,7 @@ impl Config {
                 .as_ref()
                 .map(|t| t.model_availability_nux.clone())
                 .unwrap_or_default(),
+            initial_collaboration_mode: cfg.initial_collaboration_mode.unwrap_or(ModeKind::Default),
             tui_alternate_screen: cfg
                 .tui
                 .as_ref()

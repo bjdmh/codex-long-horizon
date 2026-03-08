@@ -91,6 +91,10 @@ Fetch the built-in collaboration mode presets with `collaborationMode/list`. Thi
 
 When sending `turn/start` with `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
 
+Current built-in modes are typically `Default`, `Execute`, and `Plan`. `Execute`
+is the long-horizon preset: it keeps working until the task is complete or a
+real user blocker is reached.
+
 ## Event stream
 
 While a conversation runs, the server sends notifications:

@@ -688,6 +688,15 @@
       },
       "type": "object"
     },
+    "ModeKind": {
+      "description": "Initial collaboration mode to use when the TUI starts.",
+      "enum": [
+        "plan",
+        "default",
+        "execute"
+      ],
+      "type": "string"
+    },
     "ModelAvailabilityNuxConfig": {
       "additionalProperties": {
         "format": "uint32",
@@ -1909,6 +1918,14 @@
       ],
       "default": null,
       "description": "Settings that govern if and what will be written to `~/.codex/history.jsonl`."
+    },
+    "initial_collaboration_mode": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ModeKind"
+        }
+      ],
+      "description": "Start new sessions in the specified collaboration mode."
     },
     "instructions": {
       "description": "System instructions.",

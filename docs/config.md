@@ -49,4 +49,16 @@ Plan preset. The string value `none` means "no reasoning" (an explicit Plan
 override), not "inherit the global default". There is currently no separate
 config value for "follow the global default in Plan mode".
 
+## Initial collaboration mode
+
+`initial_collaboration_mode` lets you choose the built-in collaboration preset
+used when a new session starts. Supported values are `default`, `execute`, and
+`plan`.
+
+- `default`: the regular interactive coding mode
+- `execute`: a long-horizon mode that keeps pushing work forward and only ends a
+  turn when the task is complete (`<task_complete>`) or genuinely blocked on
+  user input (`<await_user_input>`)
+- `plan`: the planning-focused mode
+
 Ctrl+C/Ctrl+D quitting uses a ~1 second double-press hint (`ctrl + c again to quit`).

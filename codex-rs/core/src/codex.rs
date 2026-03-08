@@ -29,8 +29,8 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::features::FEATURES;
 use crate::features::Feature;
 use crate::features::maybe_push_unstable_features_warning;
-#[cfg(test)]
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use crate::models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
@@ -40,7 +40,9 @@ use crate::realtime_conversation::handle_close as handle_realtime_conversation_c
 use crate::realtime_conversation::handle_start as handle_realtime_conversation_start;
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
 use crate::rollout::session_index;
+use crate::stream_events_utils::AssistantControlSignal;
 use crate::stream_events_utils::HandleOutputCtx;
+use crate::stream_events_utils::execute_mode_auto_continue_message;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
@@ -461,14 +463,24 @@ impl Codex {
 
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
         // to avoid extracting these fields separately and constructing CollaborationMode here.
-        let collaboration_mode = CollaborationMode {
-            mode: ModeKind::Default,
+        let base_collaboration_mode = CollaborationMode {
+            mode: config.initial_collaboration_mode,
             settings: Settings {
                 model: model.clone(),
                 reasoning_effort: config.model_reasoning_effort,
                 developer_instructions: None,
             },
         };
+        let collaboration_mode = builtin_collaboration_mode_presets(CollaborationModesConfig {
+            default_mode_request_user_input: config
+                .features
+                .enabled(Feature::DefaultModeRequestUserInput),
+        })
+        .into_iter()
+        .find(|mask| mask.mode == Some(config.initial_collaboration_mode))
+        .map_or(base_collaboration_mode.clone(), |mask| {
+            base_collaboration_mode.apply_mask(&mask)
+        });
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             collaboration_mode,
@@ -3958,9 +3970,6 @@ mod handlers {
     use codex_protocol::request_user_input::RequestUserInputResponse;
 
     use crate::context_manager::is_user_turn_boundary;
-    use codex_protocol::config_types::CollaborationMode;
-    use codex_protocol::config_types::ModeKind;
-    use codex_protocol::config_types::Settings;
     use codex_protocol::dynamic_tools::DynamicToolResponse;
     use codex_protocol::mcp::RequestId as ProtocolRequestId;
     use codex_protocol::user_input::UserInput;
@@ -4012,16 +4021,19 @@ mod handlers {
                 collaboration_mode,
                 personality,
             } => {
-                let collaboration_mode = collaboration_mode.or_else(|| {
-                    Some(CollaborationMode {
-                        mode: ModeKind::Default,
-                        settings: Settings {
-                            model: model.clone(),
-                            reasoning_effort: effort,
-                            developer_instructions: None,
-                        },
-                    })
-                });
+                let collaboration_mode = if let Some(collaboration_mode) = collaboration_mode {
+                    Some(collaboration_mode)
+                } else {
+                    let current_collaboration_mode = {
+                        let state = sess.state.lock().await;
+                        state.session_configuration.collaboration_mode.clone()
+                    };
+                    Some(current_collaboration_mode.with_updates(
+                        Some(model.clone()),
+                        Some(effort),
+                        None,
+                    ))
+                };
                 (
                     items,
                     SessionSettingsUpdate {
@@ -5071,6 +5083,7 @@ pub(crate) async fn run_turn(
     // one instance across retries within this turn.
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
+    let mut execute_auto_continuation_count = 0_usize;
 
     loop {
         // Note that pending_input would be something like a message the user
@@ -5137,6 +5150,7 @@ pub(crate) async fn run_turn(
                 let SamplingRequestResult {
                     needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
+                    assistant_control_signal,
                 } = sampling_request_output;
                 let total_usage_tokens = sess.get_total_token_usage().await;
                 let token_limit_reached = total_usage_tokens >= auto_compact_limit;
@@ -5170,6 +5184,42 @@ pub(crate) async fn run_turn(
                 }
 
                 if !needs_follow_up {
+                    if turn_context.collaboration_mode.mode == ModeKind::Execute {
+                        match assistant_control_signal {
+                            AssistantControlSignal::Continue => {
+                                if execute_auto_continuation_count
+                                    >= EXECUTE_AUTO_CONTINUATION_LIMIT
+                                {
+                                    sess.send_event(
+                                        &turn_context,
+                                        EventMsg::Warning(WarningEvent {
+                                            message: format!(
+                                                "Execute mode reached the auto-continuation limit ({EXECUTE_AUTO_CONTINUATION_LIMIT}); ending the turn without an explicit completion marker."
+                                            ),
+                                        }),
+                                    )
+                                    .await;
+                                } else if sess
+                                    .inject_response_items(vec![ResponseInputItem::Message {
+                                        role: "developer".to_string(),
+                                        content: vec![ContentItem::InputText {
+                                            text: execute_mode_auto_continue_message(
+                                                execute_auto_continuation_count + 1,
+                                            ),
+                                        }],
+                                    }])
+                                    .await
+                                    .is_ok()
+                                {
+                                    execute_auto_continuation_count += 1;
+                                    continue;
+                                }
+                            }
+                            AssistantControlSignal::AwaitUserInput
+                            | AssistantControlSignal::TaskComplete => {}
+                        }
+                    }
+
                     last_agent_message = sampling_request_last_agent_message;
                     let hook_outcomes = sess
                         .hooks()
@@ -5741,7 +5791,10 @@ async fn built_tools(
 struct SamplingRequestResult {
     needs_follow_up: bool,
     last_agent_message: Option<String>,
+    assistant_control_signal: AssistantControlSignal,
 }
+
+const EXECUTE_AUTO_CONTINUATION_LIMIT: usize = 16;
 
 /// Ephemeral per-response state for streaming a single proposed plan.
 /// This is intentionally not persisted or stored in session/state since it
@@ -6236,7 +6289,7 @@ async fn handle_assistant_item_done_in_plan_mode(
     {
         maybe_complete_plan_item_from_message(sess, turn_context, state, item).await;
 
-        if let Some(turn_item) = handle_non_tool_response_item(item, true) {
+        if let Some(turn_item) = handle_non_tool_response_item(item, ModeKind::Plan) {
             emit_turn_item_in_plan_mode(
                 sess,
                 turn_context,
@@ -6248,7 +6301,7 @@ async fn handle_assistant_item_done_in_plan_mode(
         }
 
         record_completed_response_item(sess, turn_context, item).await;
-        if let Some(agent_message) = last_assistant_message_from_item(item, true) {
+        if let Some(agent_message) = last_assistant_message_from_item(item, ModeKind::Plan) {
             *last_agent_message = Some(agent_message);
         }
         return true;
@@ -6326,6 +6379,7 @@ async fn try_run_sampling_request(
         FuturesOrdered::new();
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
+    let mut assistant_control_signal = AssistantControlSignal::Continue;
     let mut active_item: Option<TurnItem> = None;
     let mut should_emit_turn_diff = false;
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
@@ -6412,10 +6466,13 @@ async fn try_run_sampling_request(
                 if let Some(agent_message) = output_result.last_agent_message {
                     last_agent_message = Some(agent_message);
                 }
+                assistant_control_signal = output_result.assistant_control_signal;
                 needs_follow_up |= output_result.needs_follow_up;
             }
             ResponseEvent::OutputItemAdded(item) => {
-                if let Some(turn_item) = handle_non_tool_response_item(&item, plan_mode) {
+                if let Some(turn_item) =
+                    handle_non_tool_response_item(&item, turn_context.collaboration_mode.mode)
+                {
                     let mut turn_item = turn_item;
                     let mut seeded_parsed: Option<ParsedAssistantTextDelta> = None;
                     let mut seeded_item_id: Option<String> = None;
@@ -6506,6 +6563,7 @@ async fn try_run_sampling_request(
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
                     last_agent_message,
+                    assistant_control_signal,
                 });
             }
             ResponseEvent::OutputTextDelta(delta) => {
@@ -6614,7 +6672,7 @@ async fn try_run_sampling_request(
 
 pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<String> {
     for item in responses.iter().rev() {
-        if let Some(message) = last_assistant_message_from_item(item, false) {
+        if let Some(message) = last_assistant_message_from_item(item, ModeKind::Default) {
             return Some(message);
         }
     }
