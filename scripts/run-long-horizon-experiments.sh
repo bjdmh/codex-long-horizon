@@ -5,6 +5,7 @@ ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 CODEX_HOME_DIR=${CODEX_HOME_DIR:-/root/.paolu-codex-long-horizon}
 WORK_BASE=${WORK_BASE:-/tmp/long-horizon-bench}
 CODEX_BIN=${CODEX_BIN:-$ROOT_DIR/codex-rs/target/debug/codex}
+SUMMARY_PATH=${SUMMARY_PATH:-$WORK_BASE/summary.md}
 
 export GIT_TERMINAL_PROMPT=0
 
@@ -18,6 +19,9 @@ if ! gh auth status --hostname github.com >/dev/null 2>&1; then
 fi
 
 mkdir -p "$WORK_BASE"
+printf '# Long-Horizon Benchmark Summary\n\n' > "$SUMMARY_PATH"
+printf '| Scenario | Status | Notes |\n' >> "$SUMMARY_PATH"
+printf '| --- | --- | --- |\n' >> "$SUMMARY_PATH"
 
 if [ ! -x "$CODEX_BIN" ]; then
   (cd "$ROOT_DIR/codex-rs" && cargo build -p codex-cli --bin codex)
@@ -39,6 +43,13 @@ assert_no_optional_confirmation_language() {
     echo "error: benchmark output shows optional confirmation-seeking behavior" >&2
     exit 10
   fi
+}
+
+append_summary() {
+  local name="$1"
+  local status="$2"
+  local note="$3"
+  printf '| %s | %s | %s |\n' "$name" "$status" "$note" >> "$SUMMARY_PATH"
 }
 
 run_python_fix_benchmark() {
@@ -109,6 +120,7 @@ PY
 )
 }
 JSON
+  append_summary "python_fix" "passed" "Fixed failing pytest suite autonomously"
 }
 
 run_marked_completion_benchmark() {
@@ -146,6 +158,7 @@ PY
 )
 }
 JSON
+  append_summary "marked_completion" "passed" "Edited target file and stopped after verification"
 }
 
 run_multi_tool_benchmark() {
@@ -183,6 +196,7 @@ PY
 )
 }
 JSON
+  append_summary "multi_tool" "passed" "Completed multi-tool workflow without confirmation"
 }
 
 run_already_done_benchmark() {
@@ -257,6 +271,7 @@ PY
 )
 }
 JSON
+  append_summary "already_done" "passed" "Detected complete state without unnecessary edits"
 }
 
 run_python_fix_benchmark
@@ -269,3 +284,4 @@ printf ' - %s\n' "$WORK_BASE/python-fix/result.json"
 printf ' - %s\n' "$WORK_BASE/marked-completion/result.json"
 printf ' - %s\n' "$WORK_BASE/multi-tool/result.json"
 printf ' - %s\n' "$WORK_BASE/already-done/result.json"
+printf ' - %s\n' "$SUMMARY_PATH"

@@ -46,3 +46,10 @@ The script fails if the agent:
   continuing autonomously
 
 Results are written under `/tmp/long-horizon-bench/` by default.
+
+The benchmark also writes a compact Markdown summary to:
+
+- `/tmp/long-horizon-bench/summary.md`
+
+Use that file when you want a quick pass/fail overview without opening each
+per-scenario JSON file.
