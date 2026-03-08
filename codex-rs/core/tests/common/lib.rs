@@ -12,7 +12,9 @@ use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use regex_lite::Regex;
+use std::path::Path;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 pub mod apps_test_server;
 pub mod context_snapshot;
@@ -166,11 +168,50 @@ pub async fn load_default_config_for_test(codex_home: &TempDir) -> Config {
 
 #[cfg(target_os = "linux")]
 fn default_test_overrides() -> ConfigOverrides {
+    fn resolve_linux_sandbox_exe() -> std::path::PathBuf {
+        static SANDBOX_EXE: OnceLock<PathBuf> = OnceLock::new();
+
+        SANDBOX_EXE
+            .get_or_init(|| {
+                if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox") {
+                    return path;
+                }
+
+                let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .ancestors()
+                    .nth(3)
+                    .expect("workspace root from core/tests/common manifest dir");
+                let fallback = workspace_root
+                    .join("target")
+                    .join("debug")
+                    .join("codex-linux-sandbox");
+                if fallback.is_file() {
+                    return fallback;
+                }
+
+                let status = std::process::Command::new("cargo")
+                    .arg("build")
+                    .arg("-p")
+                    .arg("codex-linux-sandbox")
+                    .current_dir(workspace_root)
+                    .status()
+                    .expect("spawn cargo build for codex-linux-sandbox");
+                assert!(
+                    status.success(),
+                    "expected cargo build -p codex-linux-sandbox to succeed"
+                );
+                assert!(
+                    fallback.is_file(),
+                    "expected built codex-linux-sandbox at {}",
+                    fallback.display()
+                );
+                fallback
+            })
+            .clone()
+    }
+
     ConfigOverrides {
-        codex_linux_sandbox_exe: Some(
-            codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox")
-                .expect("should find binary for codex-linux-sandbox"),
-        ),
+        codex_linux_sandbox_exe: Some(resolve_linux_sandbox_exe()),
         ..ConfigOverrides::default()
     }
 }

@@ -73,6 +73,7 @@ mod compact_resume_fork;
 mod deprecation_notice;
 mod exec;
 mod exec_policy;
+mod execute_mode;
 mod fork_thread;
 mod grep_files;
 mod hierarchical_agents;
