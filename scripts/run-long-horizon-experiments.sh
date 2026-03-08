@@ -506,21 +506,19 @@ print(json.dumps(aggregate, indent=2, ensure_ascii=False))
 PY
 
 python3 - <<PY
-from pathlib import Path
-
-aggregate = Path(${AGGREGATE_JSON@Q}).read_text()
-history = Path(${HISTORY_JSONL@Q})
-history.parent.mkdir(parents=True, exist_ok=True)
-with history.open('a', encoding='utf-8') as handle:
-    handle.write(aggregate.replace('\n', ' ') + '\n')
-PY
-
-python3 - <<PY
 import json
 from pathlib import Path
 
+aggregate_path = Path(${AGGREGATE_JSON@Q})
 summary_path = Path(${SUMMARY_PATH@Q})
-aggregate = json.loads(Path(${AGGREGATE_JSON@Q}).read_text())
+history_path = Path(${HISTORY_JSONL@Q})
+current = json.loads(aggregate_path.read_text())
+previous = None
+if history_path.exists():
+    lines = [line for line in history_path.read_text(encoding='utf-8').splitlines() if line.strip()]
+    if lines:
+        previous = json.loads(lines[-1])
+
 rows = [
     '| Scenario | Status | Duration (s) | Exec Steps | Apply Patch | Plan Updates | Optional Confirmations | Notes |',
     '| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |',
@@ -532,21 +530,45 @@ notes = {
     'already_done': 'Detected complete state without unnecessary edits',
     'dual_fix': 'Fixed multiple independent defects without waiting for input',
 }
-for scenario in aggregate['scenarios']:
+for scenario in current['scenarios']:
     metrics = scenario['metrics']
     rows.append(
         f"| {scenario['name']} | passed | {scenario['duration_secs']} | {metrics['exec_steps']} | {metrics['apply_patch_steps']} | {metrics['plan_updates']} | {metrics['optional_confirmation_hits']} | {notes.get(scenario['name'], '')} |"
     )
+
 rows.append('')
 rows.append('## Totals')
 rows.append('')
-totals = aggregate['totals']
+totals = current['totals']
 rows.append(f"- Duration: {totals['duration_secs']}s")
 rows.append(f"- Exec steps: {totals['exec_steps']}")
 rows.append(f"- Apply patch steps: {totals['apply_patch_steps']}")
 rows.append(f"- Plan updates: {totals['plan_updates']}")
 rows.append(f"- Optional confirmations: {totals['optional_confirmation_hits']}")
-summary_path.write_text('\n'.join(rows) + '\n')
+
+if previous is not None:
+    prev_totals = previous.get('totals', {})
+    rows.append('')
+    rows.append('## Delta Vs Previous Run')
+    rows.append('')
+    for key in ['duration_secs', 'exec_steps', 'apply_patch_steps', 'plan_updates', 'optional_confirmation_hits']:
+        cur = totals.get(key, 0)
+        prev = prev_totals.get(key, 0)
+        delta = cur - prev
+        sign = '+' if delta > 0 else ''
+        rows.append(f"- {key}: {cur} ({sign}{delta} vs previous)")
+
+summary_path.write_text('\n'.join(rows) + '\n', encoding='utf-8')
+PY
+
+python3 - <<PY
+from pathlib import Path
+
+aggregate = Path(${AGGREGATE_JSON@Q}).read_text()
+history = Path(${HISTORY_JSONL@Q})
+history.parent.mkdir(parents=True, exist_ok=True)
+with history.open('a', encoding='utf-8') as handle:
+    handle.write(aggregate.replace('\n', ' ') + '\n')
 PY
 
 printf 'Completed long-horizon experiments under %s\n' "$WORK_BASE"

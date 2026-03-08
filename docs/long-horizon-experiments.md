@@ -72,6 +72,9 @@ Each benchmark run also appends the aggregate JSON onto `history.jsonl`, so you
 can compare trends over time without manually collecting snapshots from prior
 runs.
 
+When a previous run exists, `summary.md` also includes a small “Delta Vs Previous
+Run” section for the aggregate metrics so regressions are visible at a glance.
+
 The benchmark script also enforces conservative guardrails on those metrics so
 obvious regressions fail fast—for example, optional confirmation hits must stay
 at zero, already-done tasks must not edit files, and simple scenarios must not
