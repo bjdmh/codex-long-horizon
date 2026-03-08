@@ -72,6 +72,12 @@ Each benchmark run also appends the aggregate JSON onto `history.jsonl`, so you
 can compare trends over time without manually collecting snapshots from prior
 runs.
 
+For a quick trend report over the accumulated history, run:
+
+- `python3 scripts/summarize-long-horizon-history.py`
+
+You can also point it at a custom history file path.
+
 When a previous run exists, `summary.md` also includes a small “Delta Vs Previous
 Run” section for the aggregate metrics so regressions are visible at a glance.
 
