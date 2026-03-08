@@ -9,6 +9,7 @@ SUMMARY_PATH=${SUMMARY_PATH:-$WORK_BASE/summary.md}
 AGGREGATE_JSON=${AGGREGATE_JSON:-$WORK_BASE/summary.json}
 BENCHMARK_TIMEOUT_SECS=${BENCHMARK_TIMEOUT_SECS:-600}
 OVERALL_EXIT_CODE=0
+HISTORY_JSONL=${HISTORY_JSONL:-$WORK_BASE/history.jsonl}
 
 export GIT_TERMINAL_PROMPT=0
 
@@ -479,6 +480,7 @@ run_scenario dual_fix run_dual_fix_benchmark_wrapper
 
 python3 - <<PY > "$AGGREGATE_JSON"
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 base = Path(${WORK_BASE@Q})
@@ -488,6 +490,7 @@ for rel in ['python-fix', 'marked-completion', 'multi-tool', 'already-done', 'du
     if result_path.exists():
         results.append(json.loads(result_path.read_text()))
 aggregate = {
+    'generated_at': datetime.now(timezone.utc).isoformat(),
     'scenarios': results,
     'totals': {
         'exec_steps': sum(item['metrics']['exec_steps'] for item in results),
@@ -500,6 +503,16 @@ aggregate = {
     },
 }
 print(json.dumps(aggregate, indent=2, ensure_ascii=False))
+PY
+
+python3 - <<PY
+from pathlib import Path
+
+aggregate = Path(${AGGREGATE_JSON@Q}).read_text()
+history = Path(${HISTORY_JSONL@Q})
+history.parent.mkdir(parents=True, exist_ok=True)
+with history.open('a', encoding='utf-8') as handle:
+    handle.write(aggregate.replace('\n', ' ') + '\n')
 PY
 
 python3 - <<PY
@@ -544,4 +557,5 @@ printf ' - %s\n' "$WORK_BASE/already-done/result.json"
 printf ' - %s\n' "$WORK_BASE/dual-fix/result.json"
 printf ' - %s\n' "$SUMMARY_PATH"
 printf ' - %s\n' "$AGGREGATE_JSON"
+printf ' - %s\n' "$HISTORY_JSONL"
 exit "$OVERALL_EXIT_CODE"

@@ -61,11 +61,16 @@ duration and execution-step counts, without opening each per-scenario JSON file.
 For machine-readable trend tracking it also writes:
 
 - `/tmp/long-horizon-bench/summary.json`
+- `/tmp/long-horizon-bench/history.jsonl`
 
 That aggregate file includes per-scenario metrics such as the number of exec
 steps, patch applications, file updates, plan updates, and any optional
 confirmation-style phrases detected in the transcript. It also records wall
 clock duration for each scenario and the aggregate total.
+
+Each benchmark run also appends the aggregate JSON onto `history.jsonl`, so you
+can compare trends over time without manually collecting snapshots from prior
+runs.
 
 The benchmark script also enforces conservative guardrails on those metrics so
 obvious regressions fail fast—for example, optional confirmation hits must stay
