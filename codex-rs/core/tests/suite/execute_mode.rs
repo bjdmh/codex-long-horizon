@@ -135,6 +135,56 @@ async fn execute_mode_auto_continues_without_user_input_until_completion() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn execute_mode_ignores_plain_text_question_and_keeps_going() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let test = test_codex().build(&server).await?;
+
+    let requests = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message(
+                    "msg-1",
+                    "I could run one more verification step. Do you want me to continue?",
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message(
+                    "msg-2",
+                    &format!("{TASK_COMPLETE_OPEN_TAG}verified without waiting for user confirmation{TASK_COMPLETE_CLOSE_TAG}"),
+                ),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let completed = submit_execute_turn(&test, "keep moving without asking me optional questions").await?;
+
+    assert_eq!(
+        completed.last_agent_message.as_deref(),
+        Some("verified without waiting for user confirmation")
+    );
+
+    let all_requests = requests.requests();
+    assert_eq!(all_requests.len(), 2);
+    assert!(
+        all_requests[1]
+            .message_input_texts("developer")
+            .iter()
+            .any(|text| text.contains(AUTO_CONTINUE_PREFIX)),
+        "plain-text questions should not pause execute mode; continuation should be injected"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn execute_mode_stops_immediately_when_task_is_marked_complete() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -163,6 +213,56 @@ async fn execute_mode_stops_immediately_when_task_is_marked_complete() -> Result
     assert!(
         !all_requests[0].body_contains_text(AUTO_CONTINUE_PREFIX),
         "completion-marked response should not trigger execute-mode continuation"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn execute_mode_does_not_stop_on_unmarked_completion_claim() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let test = test_codex().build(&server).await?;
+
+    let requests = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message(
+                    "msg-1",
+                    "Everything looks done to me; I think the task is complete.",
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message(
+                    "msg-2",
+                    &format!("{TASK_COMPLETE_OPEN_TAG}done after explicit completion marker{TASK_COMPLETE_CLOSE_TAG}"),
+                ),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let completed = submit_execute_turn(&test, "only stop when you are explicitly done").await?;
+
+    assert_eq!(
+        completed.last_agent_message.as_deref(),
+        Some("done after explicit completion marker")
+    );
+
+    let all_requests = requests.requests();
+    assert_eq!(all_requests.len(), 2);
+    assert!(
+        all_requests[1]
+            .message_input_texts("developer")
+            .iter()
+            .any(|text| text.contains(AUTO_CONTINUE_PREFIX)),
+        "unmarked completion language should still trigger execute-mode continuation"
     );
 
     Ok(())
