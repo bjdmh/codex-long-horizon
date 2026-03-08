@@ -10,6 +10,9 @@ AGGREGATE_JSON=${AGGREGATE_JSON:-$WORK_BASE/summary.json}
 BENCHMARK_TIMEOUT_SECS=${BENCHMARK_TIMEOUT_SECS:-600}
 OVERALL_EXIT_CODE=0
 HISTORY_JSONL=${HISTORY_JSONL:-$WORK_BASE/history.jsonl}
+MAX_DURATION_REGRESSION_SECS=${MAX_DURATION_REGRESSION_SECS:-60}
+MAX_EXEC_STEP_REGRESSION=${MAX_EXEC_STEP_REGRESSION:-4}
+MAX_PLAN_UPDATE_REGRESSION=${MAX_PLAN_UPDATE_REGRESSION:-4}
 
 export GIT_TERMINAL_PROMPT=0
 
@@ -558,6 +561,29 @@ if previous is not None:
         sign = '+' if delta > 0 else ''
         rows.append(f"- {key}: {cur} ({sign}{delta} vs previous)")
 
+    regressions = []
+    duration_delta = totals.get('duration_secs', 0) - prev_totals.get('duration_secs', 0)
+    exec_delta = totals.get('exec_steps', 0) - prev_totals.get('exec_steps', 0)
+    plan_delta = totals.get('plan_updates', 0) - prev_totals.get('plan_updates', 0)
+    confirm_delta = totals.get('optional_confirmation_hits', 0) - prev_totals.get('optional_confirmation_hits', 0)
+
+    if duration_delta > int(${MAX_DURATION_REGRESSION_SECS@Q}):
+        regressions.append(f"duration regression too high: +{duration_delta}s")
+    if exec_delta > int(${MAX_EXEC_STEP_REGRESSION@Q}):
+        regressions.append(f"exec step regression too high: +{exec_delta}")
+    if plan_delta > int(${MAX_PLAN_UPDATE_REGRESSION@Q}):
+        regressions.append(f"plan update regression too high: +{plan_delta}")
+    if confirm_delta > 0:
+        regressions.append(f"optional confirmations regressed by +{confirm_delta}")
+
+    if regressions:
+        rows.append('')
+        rows.append('## Regression Warnings')
+        rows.append('')
+        for warning in regressions:
+            rows.append(f"- {warning}")
+        Path(${WORK_BASE@Q}).join('regression-warnings.txt').write_text('\n'.join(regressions) + '\n', encoding='utf-8')
+
 summary_path.write_text('\n'.join(rows) + '\n', encoding='utf-8')
 PY
 
@@ -571,6 +597,11 @@ with history.open('a', encoding='utf-8') as handle:
     handle.write(aggregate.replace('\n', ' ') + '\n')
 PY
 
+if [ -f "$WORK_BASE/regression-warnings.txt" ]; then
+  cat "$WORK_BASE/regression-warnings.txt" >&2
+  OVERALL_EXIT_CODE=1
+fi
+
 printf 'Completed long-horizon experiments under %s\n' "$WORK_BASE"
 printf ' - %s\n' "$WORK_BASE/python-fix/result.json"
 printf ' - %s\n' "$WORK_BASE/marked-completion/result.json"
@@ -580,4 +611,7 @@ printf ' - %s\n' "$WORK_BASE/dual-fix/result.json"
 printf ' - %s\n' "$SUMMARY_PATH"
 printf ' - %s\n' "$AGGREGATE_JSON"
 printf ' - %s\n' "$HISTORY_JSONL"
+if [ -f "$WORK_BASE/regression-warnings.txt" ]; then
+  printf ' - %s\n' "$WORK_BASE/regression-warnings.txt"
+fi
 exit "$OVERALL_EXIT_CODE"

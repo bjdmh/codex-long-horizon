@@ -75,6 +75,11 @@ runs.
 When a previous run exists, `summary.md` also includes a small “Delta Vs Previous
 Run” section for the aggregate metrics so regressions are visible at a glance.
 
+The script also applies lightweight regression thresholds to those deltas. If a
+new run is materially slower or more verbose than the previous one, it records
+`regression-warnings.txt` and exits non-zero after finishing the full benchmark
+suite.
+
 The benchmark script also enforces conservative guardrails on those metrics so
 obvious regressions fail fast—for example, optional confirmation hits must stay
 at zero, already-done tasks must not edit files, and simple scenarios must not
