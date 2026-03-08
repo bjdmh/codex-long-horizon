@@ -66,3 +66,6 @@ That aggregate file includes per-scenario metrics such as the number of exec
 steps, patch applications, file updates, plan updates, and any optional
 confirmation-style phrases detected in the transcript. It also records wall
 clock duration for each scenario and the aggregate total.
+
+If one scenario fails, the script keeps running the remaining scenarios and
+records the failure in the Markdown summary before exiting non-zero at the end.

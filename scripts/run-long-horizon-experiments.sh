@@ -8,6 +8,7 @@ CODEX_BIN=${CODEX_BIN:-$ROOT_DIR/codex-rs/target/debug/codex}
 SUMMARY_PATH=${SUMMARY_PATH:-$WORK_BASE/summary.md}
 AGGREGATE_JSON=${AGGREGATE_JSON:-$WORK_BASE/summary.json}
 BENCHMARK_TIMEOUT_SECS=${BENCHMARK_TIMEOUT_SECS:-600}
+OVERALL_EXIT_CODE=0
 
 export GIT_TERMINAL_PROMPT=0
 
@@ -68,6 +69,12 @@ append_summary() {
     "$name" "$status" "$duration_secs" "$exec_steps" "$apply_patch_steps" "$plan_updates" "$confirmation_hits" "$note" >> "$SUMMARY_PATH"
 }
 
+append_summary_failure() {
+  local name="$1"
+  local note="$2"
+  printf '| %s | failed | - | - | - | - | - | %s |\n' "$name" "$note" >> "$SUMMARY_PATH"
+}
+
 run_codex_exec() {
   local prompt="$1"
   local transcript_path="$2"
@@ -85,6 +92,23 @@ run_codex_exec() {
     exit "$exit_code"
   fi
   printf '%s' "$duration"
+}
+
+run_scenario() {
+  local name="$1"
+  shift
+  if "$@"; then
+    return 0
+  fi
+
+  OVERALL_EXIT_CODE=1
+  local scenario_dir="$WORK_BASE/$name"
+  local note="scenario failed"
+  if [ -f "$scenario_dir/error.txt" ]; then
+    note=$(tr '\n' ' ' < "$scenario_dir/error.txt" | sed 's/|/\//g' | cut -c1-160)
+  fi
+  append_summary_failure "$name" "$note"
+  return 0
 }
 
 transcript_metric_count() {
@@ -375,24 +399,42 @@ PY
   append_summary "dual_fix" "passed" "$duration_secs" 0 0 0 0 "Fixed multiple independent defects without waiting for input"
 }
 
-run_python_fix_benchmark
-run_marked_completion_benchmark
-run_multi_tool_benchmark
-run_already_done_benchmark
-run_dual_fix_benchmark
+run_python_fix_benchmark_wrapper() {
+  run_python_fix_benchmark 2> "$WORK_BASE/python-fix/error.txt"
+}
+
+run_marked_completion_benchmark_wrapper() {
+  run_marked_completion_benchmark 2> "$WORK_BASE/marked-completion/error.txt"
+}
+
+run_multi_tool_benchmark_wrapper() {
+  run_multi_tool_benchmark 2> "$WORK_BASE/multi-tool/error.txt"
+}
+
+run_already_done_benchmark_wrapper() {
+  run_already_done_benchmark 2> "$WORK_BASE/already-done/error.txt"
+}
+
+run_dual_fix_benchmark_wrapper() {
+  run_dual_fix_benchmark 2> "$WORK_BASE/dual-fix/error.txt"
+}
+
+run_scenario python_fix run_python_fix_benchmark_wrapper
+run_scenario marked_completion run_marked_completion_benchmark_wrapper
+run_scenario multi_tool run_multi_tool_benchmark_wrapper
+run_scenario already_done run_already_done_benchmark_wrapper
+run_scenario dual_fix run_dual_fix_benchmark_wrapper
 
 python3 - <<PY > "$AGGREGATE_JSON"
 import json
 from pathlib import Path
 
 base = Path(${WORK_BASE@Q})
-results = [
-    json.loads((base / 'python-fix' / 'result.json').read_text()),
-    json.loads((base / 'marked-completion' / 'result.json').read_text()),
-    json.loads((base / 'multi-tool' / 'result.json').read_text()),
-    json.loads((base / 'already-done' / 'result.json').read_text()),
-    json.loads((base / 'dual-fix' / 'result.json').read_text()),
-]
+results = []
+for rel in ['python-fix', 'marked-completion', 'multi-tool', 'already-done', 'dual-fix']:
+    result_path = base / rel / 'result.json'
+    if result_path.exists():
+        results.append(json.loads(result_path.read_text()))
 aggregate = {
     'scenarios': results,
     'totals': {
@@ -450,3 +492,4 @@ printf ' - %s\n' "$WORK_BASE/already-done/result.json"
 printf ' - %s\n' "$WORK_BASE/dual-fix/result.json"
 printf ' - %s\n' "$SUMMARY_PATH"
 printf ' - %s\n' "$AGGREGATE_JSON"
+exit "$OVERALL_EXIT_CODE"
