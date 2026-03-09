@@ -129,3 +129,7 @@ long-horizon-soak *args:
 [no-cd]
 long-horizon-suite *args:
     ./scripts/run-long-horizon-suite.sh "$@"
+
+[no-cd]
+long-horizon-gate *args:
+    ./scripts/run-long-horizon-gate.sh "$@"

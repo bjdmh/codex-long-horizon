@@ -118,6 +118,12 @@ For a strict pass/fail health gate, run:
 This command exits non-zero if benchmark regression warnings, soak warnings, or
 optional confirmation regressions are present.
 
+If the environment is already prepared and you want a single local gate that
+runs the suite and then enforces the health check, use:
+
+- `scripts/run-long-horizon-gate.sh`
+- `just long-horizon-gate`
+
 For a compact human-readable overview of the current benchmark, soak, and suite
 artifacts, run:
 
