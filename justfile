@@ -101,3 +101,7 @@ long-horizon-history *args:
 [no-cd]
 long-horizon-soak *args:
     ./scripts/run-long-horizon-soak.sh "$@"
+
+[no-cd]
+long-horizon-suite *args:
+    ./scripts/run-long-horizon-suite.sh "$@"

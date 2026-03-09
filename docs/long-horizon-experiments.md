@@ -95,6 +95,12 @@ For repeated end-to-end runs against the real benchmark suite, use:
 - `scripts/run-long-horizon-soak.sh`
 - `just long-horizon-soak`
 
+For a one-shot full run that executes the benchmark suite, a soak cycle, and
+then writes a single combined report, use:
+
+- `scripts/run-long-horizon-suite.sh`
+- `just long-horizon-suite`
+
 By default it runs the benchmark suite 3 times and writes:
 
 - `/tmp/long-horizon-soak/soak-history.jsonl`
