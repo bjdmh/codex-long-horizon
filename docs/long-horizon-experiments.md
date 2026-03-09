@@ -91,6 +91,14 @@ For a short current-health snapshot, run:
 - `python3 scripts/long-horizon-status.py`
 - `just long-horizon-status`
 
+For a strict pass/fail health gate, run:
+
+- `python3 scripts/check-long-horizon-health.py`
+- `just long-horizon-health`
+
+This command exits non-zero if benchmark regression warnings, soak warnings, or
+optional confirmation regressions are present.
+
 You can also point it at a custom history file path.
 
 ## Soak runs
