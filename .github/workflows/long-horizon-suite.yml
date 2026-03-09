@@ -67,7 +67,7 @@ jobs:
             exit 1
           fi
           mkdir -p "$SRC_HOME"
-          cat > "$SRC_HOME/config.toml" <<'EOF'
+          cat > "$SRC_HOME/config.toml" <<EOF
 model = "gpt-5"
 model_provider = "openai"
 approval_policy = "never"
@@ -102,3 +102,14 @@ EOF
             /tmp/long-horizon-suite/soak/soak-history.jsonl
             /tmp/long-horizon-suite/health.txt
             /tmp/long-horizon-suite/trends.txt
+
+      - name: Publish workflow summary
+        if: always()
+        run: |
+          if [ -f /tmp/long-horizon-suite/report.md ]; then
+            cat /tmp/long-horizon-suite/report.md >> "$GITHUB_STEP_SUMMARY"
+          elif [ -f /tmp/long-horizon-suite/health.txt ]; then
+            cat /tmp/long-horizon-suite/health.txt >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Long-horizon suite produced no report artifact." >> "$GITHUB_STEP_SUMMARY"
+          fi

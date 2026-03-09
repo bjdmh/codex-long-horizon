@@ -139,6 +139,10 @@ The workflow expects a repository secret named
 `LONG_HORIZON_OPENAI_API_KEY`. Without it, the workflow fails fast before the
 suite starts.
 
+When the workflow finishes, it also publishes the generated `report.md` into
+the GitHub Actions job summary so you can inspect the latest health state
+without downloading the artifact first.
+
 By default it runs the benchmark suite 3 times and writes:
 
 - `/tmp/long-horizon-soak/soak-history.jsonl`
