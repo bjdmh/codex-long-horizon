@@ -16,6 +16,8 @@ jobs:
   long-horizon-suite:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -56,15 +58,26 @@ jobs:
 
       - name: Create experiment home
         env:
-          SRC_HOME: ${{ github.workspace }}/.github/codex
+          LONG_HORIZON_OPENAI_API_KEY: ${{ secrets.LONG_HORIZON_OPENAI_API_KEY }}
+          SRC_HOME: /tmp/source-codex-home
           DST_HOME: /tmp/long-horizon-home
         run: |
+          if [ -z "${LONG_HORIZON_OPENAI_API_KEY:-}" ]; then
+            echo "error: required secret LONG_HORIZON_OPENAI_API_KEY is not configured" >&2
+            exit 1
+          fi
           mkdir -p "$SRC_HOME"
           cat > "$SRC_HOME/config.toml" <<'EOF'
 model = "gpt-5"
 model_provider = "openai"
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
+
+[model_providers.openai]
+name = "OpenAI"
+base_url = "https://api.openai.com/v1"
+wire_api = "responses"
+http_headers = { "Authorization" = "Bearer ${LONG_HORIZON_OPENAI_API_KEY}" }
 EOF
           bash scripts/create-long-horizon-home.sh
 
