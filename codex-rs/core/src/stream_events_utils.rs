@@ -40,7 +40,7 @@ pub(crate) enum AssistantControlSignal {
 
 pub(crate) fn execute_mode_auto_continue_message(attempt: usize) -> String {
     format!(
-        "Continue executing the current task autonomously. This is execute-mode auto-continuation #{attempt}. Do not stop for a status update or optional next step. Only end the turn if the task is complete and you include {TASK_COMPLETE_OPEN_TAG}...{TASK_COMPLETE_CLOSE_TAG}, or if you are blocked on information only the user can provide and you include {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG}."
+        "Continue executing the current task autonomously. This is execute-mode auto-continuation #{attempt}. Do not stop for a status update, a completion guess, or an optional next step. Do not ask the user whether to continue unless you are truly blocked on required information. Only end the turn if the task is complete and you include {TASK_COMPLETE_OPEN_TAG}...{TASK_COMPLETE_CLOSE_TAG}, or if you are blocked on information only the user can provide and you include {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG}."
     )
 }
 
