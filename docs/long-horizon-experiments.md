@@ -115,7 +115,9 @@ then writes a single combined report, use:
 - `just long-horizon-suite`
 
 The suite runner also executes the strict health gate at the end and embeds the
-health summary in the final `report.md` output.
+health summary in the final `report.md` output. It also embeds the latest
+benchmark summary and history trend report so the final suite artifact stands on
+its own.
 
 By default it runs the benchmark suite 3 times and writes:
 
