@@ -91,6 +91,10 @@ long-horizon-bench *args:
     ./scripts/run-long-horizon-experiments.sh "$@"
 
 [no-cd]
+long-horizon-prereqs:
+    ./scripts/install-long-horizon-prereqs.sh
+
+[no-cd]
 long-horizon-history *args:
     python3 ./scripts/summarize-long-horizon-history.py "$@"
 

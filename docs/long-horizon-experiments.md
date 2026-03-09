@@ -22,6 +22,14 @@ They cover:
 
 ## Real-model benchmark
 
+On a fresh Debian/Ubuntu machine you can bootstrap the benchmark prerequisites
+with:
+
+- `just long-horizon-prereqs`
+
+That installs the compiler/tooling needed by this repo plus Node 22, pytest,
+and `just`.
+
 Use:
 
 - `scripts/run-long-horizon-experiments.sh`
