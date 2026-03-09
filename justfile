@@ -85,3 +85,15 @@ write-app-server-schema *args:
 # Tail logs from the state SQLite database
 log *args:
     if [ "${1:-}" = "--" ]; then shift; fi; cargo run -p codex-state --bin logs_client -- "$@"
+
+[no-cd]
+long-horizon-bench *args:
+    ./scripts/run-long-horizon-experiments.sh "$@"
+
+[no-cd]
+long-horizon-history *args:
+    python3 ./scripts/summarize-long-horizon-history.py "$@"
+
+[no-cd]
+long-horizon-soak *args:
+    ./scripts/run-long-horizon-soak.sh "$@"

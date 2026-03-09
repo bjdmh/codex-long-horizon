@@ -25,6 +25,7 @@ They cover:
 Use:
 
 - `scripts/run-long-horizon-experiments.sh`
+- `just long-horizon-bench`
 
 The script runs four real Execute-mode tasks with the configured `CODEX_HOME`
 experiment profile:
@@ -75,6 +76,7 @@ runs.
 For a quick trend report over the accumulated history, run:
 
 - `python3 scripts/summarize-long-horizon-history.py`
+- `just long-horizon-history`
 
 You can also point it at a custom history file path.
 
@@ -83,6 +85,7 @@ You can also point it at a custom history file path.
 For repeated end-to-end runs against the real benchmark suite, use:
 
 - `scripts/run-long-horizon-soak.sh`
+- `just long-horizon-soak`
 
 By default it runs the benchmark suite 3 times and writes:
 
