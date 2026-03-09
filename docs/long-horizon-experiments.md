@@ -36,6 +36,14 @@ To clone an existing CODEX_HOME into an Execute-mode experiment home, run:
 
 You can override `SRC_HOME` and `DST_HOME` when needed.
 
+For a single command that prepares prerequisites, creates the experiment home,
+runs the full suite, and then checks health, use:
+
+- `just long-horizon-all`
+
+This is the easiest way to bring up the full long-horizon workflow on a fresh
+machine.
+
 Use:
 
 - `scripts/run-long-horizon-experiments.sh`

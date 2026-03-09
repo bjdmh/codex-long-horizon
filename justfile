@@ -99,6 +99,10 @@ long-horizon-home:
     ./scripts/create-long-horizon-home.sh
 
 [no-cd]
+long-horizon-all *args:
+    ./scripts/bootstrap-and-run-long-horizon.sh "$@"
+
+[no-cd]
 long-horizon-history *args:
     python3 ./scripts/summarize-long-horizon-history.py "$@"
 
