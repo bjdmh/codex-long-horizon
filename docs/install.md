@@ -32,8 +32,22 @@ cargo install --locked cargo-nextest
 # Build Codex.
 cargo build
 
+# Fastest local rebuild when you only need the main CLI binary.
+cargo build -p codex-cli --bin codex
+
+# The debug binary is usually the best choice for day-to-day development.
+./target/debug/codex --help
+
 # Launch the TUI with a sample prompt.
 cargo run --bin codex -- "explain this codebase to me"
+
+# Run exec mode without rebuilding a separate release binary.
+./target/debug/codex exec "summarize the current repository"
+
+# Build the optimized release binary only when you need a production-style
+# executable for distribution or final verification.
+cargo build --release -p codex-cli --bin codex
+./target/release/codex --help
 
 # After making changes, use the root justfile helpers (they default to codex-rs):
 just fmt
@@ -48,6 +62,29 @@ just test
 # If you specifically want full feature coverage, use:
 cargo test --all-features
 ```
+
+### Fast local builds
+
+For routine development, prefer the debug build of the main CLI binary:
+
+```bash
+cargo build -p codex-cli --bin codex
+```
+
+That command reuses incremental build artifacts and writes the executable to
+`codex-rs/target/debug/codex`, which is usually much faster than a full
+workspace build or a release build.
+
+Use a release build only when you specifically need the optimized shipping
+binary:
+
+```bash
+cargo build --release -p codex-cli --bin codex
+```
+
+This workspace configures release builds with fat LTO and a single codegen
+unit in `codex-rs/Cargo.toml`, which keeps the final binary small and optimized
+but makes linking much slower than debug builds.
 
 ## Tracing / verbose logging
 

@@ -55,6 +55,7 @@ You can also use Codex with an API key, but this requires [additional setup](htt
 - [**Codex Documentation**](https://developers.openai.com/codex)
 - [**Contributing**](./docs/contributing.md)
 - [**Installing & building**](./docs/install.md)
+- [**Fast local builds**](./docs/install.md#fast-local-builds)
 - [**Long-horizon experiments**](./docs/long-horizon-experiments.md)
 - [**Open source fund**](./docs/open-source-fund.md)
 
