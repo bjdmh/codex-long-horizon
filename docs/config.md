@@ -53,7 +53,7 @@ config value for "follow the global default in Plan mode".
 
 `initial_collaboration_mode` lets you choose the built-in collaboration preset
 used when a new session starts. Supported values are `default`, `execute`, and
-`plan`.
+`plan`. When unset, Codex now starts new sessions in `execute` mode by default.
 
 - `default`: the regular interactive coding mode
 - `execute`: a long-horizon mode that keeps pushing work forward and only ends a

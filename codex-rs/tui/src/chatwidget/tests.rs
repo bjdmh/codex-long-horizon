@@ -1757,7 +1757,7 @@ async fn make_chatwidget_manual(
     ));
     let reasoning_effort = None;
     let base_mode = CollaborationMode {
-        mode: ModeKind::Default,
+        mode: cfg.initial_collaboration_mode,
         settings: Settings {
             model: resolved_model.clone(),
             reasoning_effort,
@@ -1765,7 +1765,9 @@ async fn make_chatwidget_manual(
         },
     };
     let current_collaboration_mode = base_mode;
-    let active_collaboration_mask = collaboration_modes::default_mask(models_manager.as_ref());
+    let active_collaboration_mask =
+        collaboration_modes::mask_for_kind(models_manager.as_ref(), cfg.initial_collaboration_mode)
+            .or_else(|| collaboration_modes::default_mask(models_manager.as_ref()));
     let mut widget = ChatWidget {
         app_event_tx,
         codex_op_tx: op_tx,
@@ -5185,7 +5187,7 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
         Op::UserTurn {
             collaboration_mode:
                 Some(CollaborationMode {
-                    mode: ModeKind::Default,
+                    mode: ModeKind::Execute,
                     ..
                 }),
             personality: Some(Personality::Pragmatic),
@@ -5203,7 +5205,7 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
         Op::UserTurn {
             collaboration_mode:
                 Some(CollaborationMode {
-                    mode: ModeKind::Default,
+                    mode: ModeKind::Execute,
                     ..
                 }),
             personality: Some(Personality::Pragmatic),
@@ -5319,7 +5321,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
     };
 
     let chat = ChatWidget::new(init, thread_manager);
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Execute);
     assert_eq!(chat.current_model(), resolved_model);
 }
 
@@ -5369,7 +5371,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
     };
 
     let chat = ChatWidget::new(init, thread_manager);
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Execute);
     assert_eq!(chat.current_model(), resolved_model);
 }
 
@@ -5438,7 +5440,7 @@ async fn collab_mode_is_sent_after_enabling() {
         Op::UserTurn {
             collaboration_mode:
                 Some(CollaborationMode {
-                    mode: ModeKind::Default,
+                    mode: ModeKind::Execute,
                     ..
                 }),
             personality: Some(Personality::Pragmatic),
@@ -5462,7 +5464,7 @@ async fn collab_mode_applies_default_preset() {
         Op::UserTurn {
             collaboration_mode:
                 Some(CollaborationMode {
-                    mode: ModeKind::Default,
+                    mode: ModeKind::Execute,
                     ..
                 }),
             personality: Some(Personality::Pragmatic),
@@ -5473,8 +5475,8 @@ async fn collab_mode_applies_default_preset() {
         }
     }
 
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
-    assert_eq!(chat.current_collaboration_mode().mode, ModeKind::Default);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Execute);
+    assert_eq!(chat.current_collaboration_mode().mode, ModeKind::Execute);
 }
 
 #[tokio::test]

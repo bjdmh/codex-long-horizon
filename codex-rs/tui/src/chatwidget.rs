@@ -3053,7 +3053,7 @@ impl ChatWidget {
             reasoning_effort: None,
             developer_instructions: None,
         };
-        // Collaboration modes start in Default mode.
+        // Collaboration modes start in the configured initial mode.
         let current_collaboration_mode = CollaborationMode {
             mode: config.initial_collaboration_mode,
             settings: fallback_default,
@@ -3235,7 +3235,7 @@ impl ChatWidget {
             reasoning_effort: None,
             developer_instructions: None,
         };
-        // Collaboration modes start in Default mode.
+        // Collaboration modes start in the configured initial mode.
         let current_collaboration_mode = CollaborationMode {
             mode: config.initial_collaboration_mode,
             settings: fallback_default,
@@ -3412,7 +3412,7 @@ impl ChatWidget {
             reasoning_effort: None,
             developer_instructions: None,
         };
-        // Collaboration modes start in Default mode.
+        // Collaboration modes start in the configured initial mode.
         let current_collaboration_mode = CollaborationMode {
             mode: config.initial_collaboration_mode,
             settings: fallback_default,
