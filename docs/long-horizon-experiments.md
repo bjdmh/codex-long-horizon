@@ -100,6 +100,11 @@ For a quick trend report over the accumulated history, run:
 - `python3 scripts/summarize-long-horizon-history.py`
 - `just long-horizon-history`
 
+For the top-level suite history, run:
+
+- `python3 scripts/summarize-long-horizon-suite-history.py`
+- `just long-horizon-suite-history`
+
 For a short current-health snapshot, run:
 
 - `python3 scripts/long-horizon-status.py`

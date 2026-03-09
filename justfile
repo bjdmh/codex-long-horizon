@@ -107,6 +107,10 @@ long-horizon-history *args:
     python3 ./scripts/summarize-long-horizon-history.py "$@"
 
 [no-cd]
+long-horizon-suite-history *args:
+    python3 ./scripts/summarize-long-horizon-suite-history.py "$@"
+
+[no-cd]
 long-horizon-status *args:
     python3 ./scripts/long-horizon-status.py "$@"
 
