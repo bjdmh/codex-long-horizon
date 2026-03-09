@@ -106,6 +106,7 @@ EOF
             /tmp/long-horizon-suite/soak/soak-warnings.txt
             /tmp/long-horizon-suite/health.txt
             /tmp/long-horizon-suite/trends.txt
+            /tmp/long-horizon-suite/dashboard.txt
 
       - name: Publish workflow summary
         if: always()

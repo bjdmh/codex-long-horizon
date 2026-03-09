@@ -147,6 +147,9 @@ its own.
 The suite also emits a dashboard-style text summary (`dashboard.txt`) so the top
 level status can be skimmed quickly without opening the full report.
 
+That `dashboard.txt` artifact is also uploaded by the CI workflow alongside the
+full report and JSON outputs.
+
 In addition to the Markdown report, the suite runner writes:
 
 - `suite-summary.json`
