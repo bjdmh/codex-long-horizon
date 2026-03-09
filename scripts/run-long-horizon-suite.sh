@@ -27,6 +27,7 @@ HEALTH_TXT="$WORK_BASE/health.txt"
 TRENDS_TXT="$WORK_BASE/trends.txt"
 SUITE_JSON="$WORK_BASE/suite-summary.json"
 SUITE_HISTORY_JSONL="$WORK_BASE/suite-history.jsonl"
+DASHBOARD_TXT="$WORK_BASE/dashboard.txt"
 
 rm -rf "$BENCH_DIR" "$SOAK_DIR"
 
@@ -38,6 +39,7 @@ CODEX_HOME_DIR="$CODEX_HOME_DIR" WORK_BASE="$SOAK_DIR" RUNS="$SOAK_RUNS" \
 
 python3 "$ROOT_DIR/scripts/check-long-horizon-health.py" "$BENCH_DIR" "$SOAK_DIR" > "$HEALTH_TXT"
 python3 "$ROOT_DIR/scripts/summarize-long-horizon-history.py" "$BENCH_DIR/history.jsonl" > "$TRENDS_TXT"
+python3 "$ROOT_DIR/scripts/long-horizon-dashboard.py" "$BENCH_DIR" "$SOAK_DIR" "$WORK_BASE" > "$DASHBOARD_TXT"
 
 python3 - <<PY
 import json
@@ -64,6 +66,7 @@ suite_summary = {
         'soak_history_jsonl': str(soak_dir / 'soak-history.jsonl'),
         'health_txt': str(health_txt),
         'trends_txt': str(trends_txt),
+        'dashboard_txt': str(Path(${DASHBOARD_TXT@Q})),
         'report_md': str(report),
     },
 }
@@ -95,6 +98,12 @@ lines.extend([
 lines.extend(trends_txt.read_text().splitlines())
 lines.extend([
     '',
+    '## Dashboard',
+    '',
+])
+lines.extend(Path(${DASHBOARD_TXT@Q}).read_text().splitlines())
+lines.extend([
+    '',
     '## Health Gate',
     '',
 ])
@@ -113,6 +122,7 @@ if [ -f "$SOAK_DIR/soak-warnings.txt" ]; then
 fi
 printf ' - %s\n' "$HEALTH_TXT"
 printf ' - %s\n' "$TRENDS_TXT"
+printf ' - %s\n' "$DASHBOARD_TXT"
 printf ' - %s\n' "$SUITE_JSON"
 printf ' - %s\n' "$SUITE_HISTORY_JSONL"
 printf ' - %s\n' "$REPORT_MD"

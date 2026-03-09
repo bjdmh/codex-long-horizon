@@ -144,6 +144,9 @@ health summary in the final `report.md` output. It also embeds the latest
 benchmark summary and history trend report so the final suite artifact stands on
 its own.
 
+The suite also emits a dashboard-style text summary (`dashboard.txt`) so the top
+level status can be skimmed quickly without opening the full report.
+
 In addition to the Markdown report, the suite runner writes:
 
 - `suite-summary.json`
