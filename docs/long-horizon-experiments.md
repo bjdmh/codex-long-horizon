@@ -133,6 +133,13 @@ health summary in the final `report.md` output. It also embeds the latest
 benchmark summary and history trend report so the final suite artifact stands on
 its own.
 
+In addition to the Markdown report, the suite runner writes:
+
+- `suite-summary.json`
+- `suite-history.jsonl`
+
+so the top-level end-to-end state can also be tracked over time.
+
 ## GitHub Actions
 
 This branch also includes a manually-triggered workflow:
