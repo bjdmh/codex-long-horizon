@@ -125,6 +125,16 @@ health summary in the final `report.md` output. It also embeds the latest
 benchmark summary and history trend report so the final suite artifact stands on
 its own.
 
+## GitHub Actions
+
+This branch also includes a manually-triggered workflow:
+
+- `.github/workflows/long-horizon-suite.yml`
+
+Use it when you want to run the full long-horizon suite in CI and collect the
+final suite artifacts (`report.md`, summaries, history, and health output)
+without logging into a machine and running the scripts by hand.
+
 By default it runs the benchmark suite 3 times and writes:
 
 - `/tmp/long-horizon-soak/soak-history.jsonl`

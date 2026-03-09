@@ -1,0 +1,91 @@
+name: Long-Horizon Suite
+
+on:
+  workflow_dispatch:
+    inputs:
+      benchmark_timeout_secs:
+        description: Timeout in seconds for each benchmark scenario
+        required: false
+        default: '600'
+      soak_runs:
+        description: Number of soak repetitions
+        required: false
+        default: '1'
+
+jobs:
+  long-horizon-suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.93.0
+          components: rustfmt, clippy
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install system prerequisites
+        run: |
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            build-essential pkg-config libssl-dev libcap-dev python3-pytest just curl
+
+      - name: Install Node 22
+        run: |
+          NODE_VER='v22.22.0'
+          ARCHIVE="node-${NODE_VER}-linux-x64.tar.xz"
+          URL="https://nodejs.org/dist/${NODE_VER}/${ARCHIVE}"
+          curl --fail --silent --show-error --connect-timeout 10 --max-time 300 -o "/tmp/${ARCHIVE}" "$URL"
+          sudo rm -rf "/usr/local/node-${NODE_VER}-linux-x64"
+          sudo tar -xJf "/tmp/${ARCHIVE}" -C /usr/local
+          sudo ln -sf "/usr/local/node-${NODE_VER}-linux-x64/bin/node" /usr/local/bin/node
+          sudo ln -sf "/usr/local/node-${NODE_VER}-linux-x64/bin/npm" /usr/local/bin/npm
+          sudo ln -sf "/usr/local/node-${NODE_VER}-linux-x64/bin/npx" /usr/local/bin/npx
+          node --version
+
+      - name: Build codex
+        working-directory: codex-rs
+        run: cargo build -p codex-cli --bin codex
+
+      - name: Create experiment home
+        env:
+          SRC_HOME: ${{ github.workspace }}/.github/codex
+          DST_HOME: /tmp/long-horizon-home
+        run: |
+          mkdir -p "$SRC_HOME"
+          cat > "$SRC_HOME/config.toml" <<'EOF'
+model = "gpt-5"
+model_provider = "openai"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+EOF
+          bash scripts/create-long-horizon-home.sh
+
+      - name: Run long-horizon suite
+        env:
+          CODEX_HOME_DIR: /tmp/long-horizon-home
+          BENCHMARK_TIMEOUT_SECS: ${{ github.event.inputs.benchmark_timeout_secs || '600' }}
+          SOAK_RUNS: ${{ github.event.inputs.soak_runs || '1' }}
+        run: bash scripts/run-long-horizon-suite.sh
+
+      - name: Upload suite artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: long-horizon-suite
+          path: |
+            /tmp/long-horizon-suite/report.md
+            /tmp/long-horizon-suite/bench/summary.md
+            /tmp/long-horizon-suite/bench/summary.json
+            /tmp/long-horizon-suite/bench/history.jsonl
+            /tmp/long-horizon-suite/soak/soak-summary.md
+            /tmp/long-horizon-suite/soak/soak-history.jsonl
+            /tmp/long-horizon-suite/health.txt
+            /tmp/long-horizon-suite/trends.txt
