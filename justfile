@@ -99,6 +99,10 @@ long-horizon-history *args:
     python3 ./scripts/summarize-long-horizon-history.py "$@"
 
 [no-cd]
+long-horizon-status *args:
+    python3 ./scripts/long-horizon-status.py "$@"
+
+[no-cd]
 long-horizon-soak *args:
     ./scripts/run-long-horizon-soak.sh "$@"
 

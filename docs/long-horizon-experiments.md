@@ -86,6 +86,11 @@ For a quick trend report over the accumulated history, run:
 - `python3 scripts/summarize-long-horizon-history.py`
 - `just long-horizon-history`
 
+For a short current-health snapshot, run:
+
+- `python3 scripts/long-horizon-status.py`
+- `just long-horizon-status`
+
 You can also point it at a custom history file path.
 
 ## Soak runs
