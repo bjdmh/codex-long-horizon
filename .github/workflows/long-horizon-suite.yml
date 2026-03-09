@@ -95,11 +95,15 @@ EOF
           name: long-horizon-suite
           path: |
             /tmp/long-horizon-suite/report.md
+            /tmp/long-horizon-suite/suite-summary.json
+            /tmp/long-horizon-suite/suite-history.jsonl
             /tmp/long-horizon-suite/bench/summary.md
             /tmp/long-horizon-suite/bench/summary.json
             /tmp/long-horizon-suite/bench/history.jsonl
+            /tmp/long-horizon-suite/bench/regression-warnings.txt
             /tmp/long-horizon-suite/soak/soak-summary.md
             /tmp/long-horizon-suite/soak/soak-history.jsonl
+            /tmp/long-horizon-suite/soak/soak-warnings.txt
             /tmp/long-horizon-suite/health.txt
             /tmp/long-horizon-suite/trends.txt
 

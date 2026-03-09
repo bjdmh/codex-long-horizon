@@ -161,6 +161,10 @@ Use it when you want to run the full long-horizon suite in CI and collect the
 final suite artifacts (`report.md`, summaries, history, and health output)
 without logging into a machine and running the scripts by hand.
 
+The workflow uploads both top-level suite artifacts and lower-level benchmark /
+soak warning files, so debugging regressions does not require re-running the
+job locally just to inspect missing metadata.
+
 The workflow expects a repository secret named
 `LONG_HORIZON_OPENAI_API_KEY`. Without it, the workflow fails fast before the
 suite starts.
