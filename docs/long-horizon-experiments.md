@@ -150,6 +150,11 @@ health summary in the final `report.md` output. It also embeds the latest
 benchmark summary and history trend report so the final suite artifact stands on
 its own.
 
+`BENCH_RUNS` is also honored now: if you set it above `1`, the suite will run
+the real benchmark multiple times before the soak phase and include the latest
+benchmark result plus the benchmark history trend report in the final suite
+report.
+
 The suite also emits a dashboard-style text summary (`dashboard.txt`) so the top
 level status can be skimmed quickly without opening the full report.
 
