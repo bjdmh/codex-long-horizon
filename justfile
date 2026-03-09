@@ -119,6 +119,10 @@ long-horizon-health *args:
     python3 ./scripts/check-long-horizon-health.py "$@"
 
 [no-cd]
+long-horizon-dashboard *args:
+    python3 ./scripts/long-horizon-dashboard.py "$@"
+
+[no-cd]
 long-horizon-soak *args:
     ./scripts/run-long-horizon-soak.sh "$@"
 

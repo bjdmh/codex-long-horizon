@@ -118,6 +118,12 @@ For a strict pass/fail health gate, run:
 This command exits non-zero if benchmark regression warnings, soak warnings, or
 optional confirmation regressions are present.
 
+For a compact human-readable overview of the current benchmark, soak, and suite
+artifacts, run:
+
+- `python3 scripts/long-horizon-dashboard.py`
+- `just long-horizon-dashboard`
+
 You can also point it at a custom history file path.
 
 ## Soak runs
