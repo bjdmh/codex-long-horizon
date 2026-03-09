@@ -6,6 +6,9 @@ RUNS=${RUNS:-3}
 WORK_BASE=${WORK_BASE:-/tmp/long-horizon-soak}
 BENCHMARK_SCRIPT=${BENCHMARK_SCRIPT:-$ROOT_DIR/scripts/run-long-horizon-experiments.sh}
 CODEX_HOME_DIR=${CODEX_HOME_DIR:-/root/.paolu-codex-long-horizon}
+MAX_DURATION_STDDEV=${MAX_DURATION_STDDEV:-30}
+MAX_EXEC_STEPS_STDDEV=${MAX_EXEC_STEPS_STDDEV:-3}
+OVERALL_EXIT_CODE=0
 
 export GIT_TERMINAL_PROMPT=0
 
@@ -87,9 +90,44 @@ rows.extend([
     f"- plan_updates avg/max: {statistics.mean(plan_updates):.2f} / {max(plan_updates)}",
     f"- optional confirmations total: {sum(confirmations)}",
 ])
+
+scenario_names = sorted({scenario['name'] for item in history for scenario in item.get('scenarios', [])})
+rows.extend(['', '## Scenario Stability', ''])
+regressions = []
+for name in scenario_names:
+    durations = []
+    execs = []
+    for item in history:
+        for scenario in item.get('scenarios', []):
+            if scenario['name'] == name:
+                durations.append(scenario['duration_secs'])
+                execs.append(scenario['metrics']['exec_steps'])
+                break
+    dur_stddev = statistics.pstdev(durations) if len(durations) > 1 else 0.0
+    exec_stddev = statistics.pstdev(execs) if len(execs) > 1 else 0.0
+    rows.append(f"- {name}: duration_stddev={dur_stddev:.2f}s, exec_stddev={exec_stddev:.2f}")
+    if dur_stddev > float(${MAX_DURATION_STDDEV@Q}):
+        regressions.append(f"{name}: duration stddev too high ({dur_stddev:.2f}s)")
+    if exec_stddev > float(${MAX_EXEC_STEPS_STDDEV@Q}):
+        regressions.append(f"{name}: exec step stddev too high ({exec_stddev:.2f})")
+
+if regressions:
+    rows.extend(['', '## Soak Warnings', ''])
+    rows.extend(f"- {item}" for item in regressions)
+    Path(${WORK_BASE@Q}).join('soak-warnings.txt').write_text('\n'.join(regressions) + '\n', encoding='utf-8')
+
 Path(${summary_md@Q}).write_text('\n'.join(rows) + '\n', encoding='utf-8')
 PY
+
+if [ -f "$WORK_BASE/soak-warnings.txt" ]; then
+  cat "$WORK_BASE/soak-warnings.txt" >&2
+  OVERALL_EXIT_CODE=1
+fi
 
 printf 'Completed long-horizon soak runs under %s\n' "$WORK_BASE"
 printf ' - %s\n' "$summary_jsonl"
 printf ' - %s\n' "$summary_md"
+if [ -f "$WORK_BASE/soak-warnings.txt" ]; then
+  printf ' - %s\n' "$WORK_BASE/soak-warnings.txt"
+fi
+exit "$OVERALL_EXIT_CODE"

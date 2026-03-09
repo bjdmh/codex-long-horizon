@@ -91,6 +91,11 @@ By default it runs the benchmark suite 3 times and writes:
 
 Override `RUNS` if you want a shorter or longer soak cycle.
 
+The soak runner also computes per-scenario stability metrics (currently duration
+and exec-step standard deviation). If variability exceeds the configured
+thresholds, it writes `soak-warnings.txt` and exits non-zero after finishing
+the full soak cycle.
+
 When a previous run exists, `summary.md` also includes a small “Delta Vs Previous
 Run” section for the aggregate metrics so regressions are visible at a glance.
 
