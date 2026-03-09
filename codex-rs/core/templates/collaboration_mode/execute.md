@@ -34,6 +34,7 @@ Treat the task as a sequence of concrete steps that add up to a complete deliver
 - Execute step by step, verifying along the way rather than doing everything at the end.
 - If the task is large, keep a running checklist of what is done, what is next, and what is blocked.
 - Avoid blocking on uncertainty: choose a reasonable default and continue.
+- After you give a progress update, the next turn should usually take a concrete action or conclude; do not repeat the same status update unless the situation materially changed.
 
 ## Turn completion contract
 Do not end a turn just because you have a status update, a suggestion, or an optional next step.

@@ -44,6 +44,32 @@ pub(crate) fn execute_mode_auto_continue_message(attempt: usize) -> String {
     )
 }
 
+pub(crate) fn execute_mode_stall_recovery_message(
+    stall_count: usize,
+    repeated_status: Option<&str>,
+) -> String {
+    let repeated_status = repeated_status
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(|text| {
+            if text.chars().count() <= 160 {
+                text.to_string()
+            } else {
+                let truncated = text.chars().take(157).collect::<String>();
+                format!("{truncated}...")
+            }
+        })
+        .unwrap_or_else(|| "(no visible assistant update)".to_string());
+    format!(
+        "Your last visible update repeated without concrete progress {stall_count} time(s): \"{repeated_status}\". Take a concrete next action now instead of another status update. If the task is already complete, end with {TASK_COMPLETE_OPEN_TAG}...{TASK_COMPLETE_CLOSE_TAG}. If a required external dependency is missing, end with {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG}."
+    )
+}
+
+pub(crate) fn normalize_execute_progress_message(text: &str) -> Option<String> {
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!normalized.is_empty()).then_some(normalized)
+}
+
 fn assistant_control_signal_from_text(text: &str, mode: ModeKind) -> AssistantControlSignal {
     if mode != ModeKind::Execute {
         return AssistantControlSignal::Continue;
@@ -373,9 +399,13 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
 
 #[cfg(test)]
 mod tests {
+    use super::AWAIT_USER_INPUT_OPEN_TAG;
     use super::AssistantControlSignal;
+    use super::TASK_COMPLETE_OPEN_TAG;
+    use super::execute_mode_stall_recovery_message;
     use super::handle_non_tool_response_item;
     use super::last_assistant_message_from_item;
+    use super::normalize_execute_progress_message;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::items::TurnItem;
     use codex_protocol::models::ContentItem;
@@ -472,5 +502,32 @@ mod tests {
             super::OutputItemResult::default().assistant_control_signal,
             AssistantControlSignal::Continue
         );
+    }
+
+    #[test]
+    fn normalize_execute_progress_message_collapses_whitespace() {
+        assert_eq!(
+            normalize_execute_progress_message(
+                " still   working
+ on	this "
+            ),
+            Some("still working on this".to_string())
+        );
+        assert_eq!(
+            normalize_execute_progress_message(
+                "   
+	  "
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn execute_mode_stall_recovery_message_includes_repeated_status() {
+        let message = execute_mode_stall_recovery_message(2, Some("Still working on it."));
+
+        assert!(message.contains("Still working on it."));
+        assert!(message.contains(TASK_COMPLETE_OPEN_TAG));
+        assert!(message.contains(AWAIT_USER_INPUT_OPEN_TAG));
     }
 }

@@ -43,9 +43,11 @@ use crate::rollout::session_index;
 use crate::stream_events_utils::AssistantControlSignal;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::execute_mode_auto_continue_message;
+use crate::stream_events_utils::execute_mode_stall_recovery_message;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
+use crate::stream_events_utils::normalize_execute_progress_message;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
 use crate::stream_events_utils::record_completed_response_item;
 use crate::terminal;
@@ -5084,6 +5086,8 @@ pub(crate) async fn run_turn(
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
     let mut execute_auto_continuation_count = 0_usize;
+    let mut execute_stall_count = 0_usize;
+    let mut last_execute_progress_message: Option<String> = None;
 
     loop {
         // Note that pending_input would be something like a message the user
@@ -5183,11 +5187,39 @@ pub(crate) async fn run_turn(
                     continue;
                 }
 
+                if needs_follow_up && turn_context.collaboration_mode.mode == ModeKind::Execute {
+                    execute_stall_count = 0;
+                    last_execute_progress_message = None;
+                }
+
                 if !needs_follow_up {
                     if turn_context.collaboration_mode.mode == ModeKind::Execute {
                         match assistant_control_signal {
                             AssistantControlSignal::Continue => {
-                                if execute_auto_continuation_count
+                                let current_progress_message = sampling_request_last_agent_message
+                                    .as_deref()
+                                    .and_then(normalize_execute_progress_message);
+                                let stalled = current_progress_message.is_none()
+                                    || current_progress_message.as_ref()
+                                        == last_execute_progress_message.as_ref();
+                                if stalled {
+                                    execute_stall_count += 1;
+                                } else {
+                                    execute_stall_count = 0;
+                                }
+                                last_execute_progress_message = current_progress_message;
+
+                                if execute_stall_count >= EXECUTE_STALL_LIMIT {
+                                    sess.send_event(
+                                        &turn_context,
+                                        EventMsg::Warning(WarningEvent {
+                                            message: format!(
+                                                "Execute mode detected {EXECUTE_STALL_LIMIT} consecutive status-only responses without concrete progress; ending the turn to avoid a no-progress loop."
+                                            ),
+                                        }),
+                                    )
+                                    .await;
+                                } else if execute_auto_continuation_count
                                     >= EXECUTE_AUTO_CONTINUATION_LIMIT
                                 {
                                     sess.send_event(
@@ -5199,20 +5231,32 @@ pub(crate) async fn run_turn(
                                         }),
                                     )
                                     .await;
-                                } else if sess
-                                    .inject_response_items(vec![ResponseInputItem::Message {
-                                        role: "developer".to_string(),
-                                        content: vec![ContentItem::InputText {
-                                            text: execute_mode_auto_continue_message(
-                                                execute_auto_continuation_count + 1,
-                                            ),
-                                        }],
-                                    }])
-                                    .await
-                                    .is_ok()
-                                {
-                                    execute_auto_continuation_count += 1;
-                                    continue;
+                                } else {
+                                    let developer_message = if execute_stall_count
+                                        >= EXECUTE_STALL_ESCALATION_THRESHOLD
+                                    {
+                                        execute_mode_stall_recovery_message(
+                                            execute_stall_count,
+                                            sampling_request_last_agent_message.as_deref(),
+                                        )
+                                    } else {
+                                        execute_mode_auto_continue_message(
+                                            execute_auto_continuation_count + 1,
+                                        )
+                                    };
+                                    if sess
+                                        .inject_response_items(vec![ResponseInputItem::Message {
+                                            role: "developer".to_string(),
+                                            content: vec![ContentItem::InputText {
+                                                text: developer_message,
+                                            }],
+                                        }])
+                                        .await
+                                        .is_ok()
+                                    {
+                                        execute_auto_continuation_count += 1;
+                                        continue;
+                                    }
                                 }
                             }
                             AssistantControlSignal::AwaitUserInput
@@ -5795,6 +5839,8 @@ struct SamplingRequestResult {
 }
 
 const EXECUTE_AUTO_CONTINUATION_LIMIT: usize = 16;
+const EXECUTE_STALL_ESCALATION_THRESHOLD: usize = 1;
+const EXECUTE_STALL_LIMIT: usize = 4;
 
 /// Ephemeral per-response state for streaming a single proposed plan.
 /// This is intentionally not persisted or stored in session/state since it

@@ -210,7 +210,7 @@ impl ModelsManager {
         // retry for namespaced slugs like `custom/gpt-5.3-codex`.
         let remote = Self::find_model_by_longest_prefix(model, candidates)
             .or_else(|| Self::find_model_by_namespaced_suffix(model, candidates));
-        let model_info = if let Some(remote) = remote {
+        let mut model_info = if let Some(remote) = remote.clone() {
             ModelInfo {
                 slug: model.to_string(),
                 used_fallback_model_metadata: false,
@@ -219,6 +219,13 @@ impl ModelsManager {
         } else {
             model_info::model_info_from_slug(model)
         };
+        if model_info::is_gpt_5_4_model(model)
+            && remote
+                .as_ref()
+                .is_none_or(|candidate| candidate.slug != model)
+        {
+            model_info::apply_gpt_5_4_metadata_overrides(&mut model_info);
+        }
         model_info::with_config_overrides(model_info, config)
     }
 
@@ -540,6 +547,41 @@ mod tests {
             .await;
         assert!(unknown.used_fallback_model_metadata);
         assert_eq!(unknown.slug, "model-that-does-not-exist");
+    }
+
+    #[tokio::test]
+    async fn get_model_info_uses_gpt_5_4_fallback_metadata() {
+        let codex_home = tempdir().expect("temp dir");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
+        config.model_context_window = Some(1_000_000);
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            None,
+            CollaborationModesConfig::default(),
+        );
+
+        let model_info = manager.get_model_info("gpt-5.4", &config).await;
+
+        assert_eq!(model_info.slug, "gpt-5.4");
+        assert!(!model_info.used_fallback_model_metadata);
+        assert_eq!(
+            model_info.default_reasoning_level,
+            Some(codex_protocol::openai_models::ReasoningEffort::Medium)
+        );
+        assert!(model_info.supports_reasoning_summaries);
+        assert_eq!(
+            model_info.apply_patch_tool_type,
+            Some(codex_protocol::openai_models::ApplyPatchToolType::Freeform)
+        );
+        assert_eq!(model_info.context_window, Some(1_000_000));
+        assert!(model_info.supports_parallel_tool_calls);
     }
 
     #[tokio::test]

@@ -166,15 +166,20 @@ impl ToolOrchestrator {
             .requirements_toml()
             .network
             .is_some();
-        let initial_sandbox = match tool.sandbox_mode_for_first_attempt(req) {
-            SandboxOverride::BypassSandboxFirstAttempt => crate::exec::SandboxType::None,
-            SandboxOverride::NoOverride => self.sandbox.select_initial(
-                &turn_ctx.sandbox_policy,
-                tool.sandbox_preference(),
-                turn_ctx.windows_sandbox_level,
-                has_managed_network_requirements,
-            ),
-        };
+        let initial_sandbox =
+            if already_approved && matches!(approval_policy, AskForApproval::UnlessTrusted) {
+                crate::exec::SandboxType::None
+            } else {
+                match tool.sandbox_mode_for_first_attempt(req) {
+                    SandboxOverride::BypassSandboxFirstAttempt => crate::exec::SandboxType::None,
+                    SandboxOverride::NoOverride => self.sandbox.select_initial(
+                        &turn_ctx.sandbox_policy,
+                        tool.sandbox_preference(),
+                        turn_ctx.windows_sandbox_level,
+                        has_managed_network_requirements,
+                    ),
+                }
+            };
 
         // Platform-specific flag gating is handled by SandboxManager::select_initial
         // via crate::safety::get_platform_sandbox(..).

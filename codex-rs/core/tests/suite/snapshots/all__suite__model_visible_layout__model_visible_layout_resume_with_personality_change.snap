@@ -5,21 +5,26 @@ expression: "format_labeled_requests_snapshot(\"First post-resume turn where res
 Scenario: First post-resume turn where resumed config model differs from rollout and personality changes.
 
 ## Last Request Before Resume
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <collaboration_mode># Collaboration Mode: Default\n\nYou are now in Default mode. Any previous i...
 01:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:seed resume history
 
 ## First Request After Resume
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <collaboration_mode># Collaboration Mode: Default\n\nYou are now in Default mode. Any previous i...
 01:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:seed resume history
 03:message/assistant:recorded before resume
-04:message/developer[2]:
+04:message/developer[3]:
     [01] <model_switch>\nThe user was previously using a different model. Please continue the conversatio...
     [02] <PERMISSIONS_INSTRUCTIONS>
+    [03] <collaboration_mode># Collaboration Mode: Default\n\nYou are now in Default mode. Any previous i...
 05:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
 06:message/user:resume and change personality

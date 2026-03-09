@@ -76,6 +76,12 @@ pub(super) async fn try_run_zsh_fork(
         tracing::warn!("ZshFork backend specified, but user shell is not Zsh.");
         return Ok(None);
     }
+    if attempt.sandbox == crate::exec::SandboxType::None {
+        tracing::debug!(
+            "ZshFork backend skipping interception because the current attempt is already unsandboxed"
+        );
+        return Ok(None);
+    }
 
     let spec = build_command_spec(
         command,

@@ -30,6 +30,7 @@ const TASK_COMPLETE_OPEN_TAG: &str = "<task_complete>";
 const TASK_COMPLETE_CLOSE_TAG: &str = "</task_complete>";
 const AWAIT_USER_INPUT_OPEN_TAG: &str = "<await_user_input>";
 const AUTO_CONTINUE_PREFIX: &str = "Continue executing the current task autonomously.";
+const STALL_RECOVERY_PREFIX: &str = "Your last visible update repeated without concrete progress";
 
 fn execute_mode(model: String) -> CollaborationMode {
     CollaborationMode {
@@ -164,7 +165,8 @@ async fn execute_mode_ignores_plain_text_question_and_keeps_going() -> Result<()
     )
     .await;
 
-    let completed = submit_execute_turn(&test, "keep moving without asking me optional questions").await?;
+    let completed =
+        submit_execute_turn(&test, "keep moving without asking me optional questions").await?;
 
     assert_eq!(
         completed.last_agent_message.as_deref(),
@@ -320,10 +322,7 @@ async fn execute_mode_recovers_from_tool_failure_without_user_input() -> Result<
         "login": false,
         "timeout_ms": 1000,
     }))?;
-    let recovery_command = format!(
-        "printf fixed > {:?} && cat {:?}",
-        recovered_path, recovered_path
-    );
+    let recovery_command = format!("printf fixed > {recovered_path:?} && cat {recovered_path:?}");
     let recovery_args = serde_json::to_string(&json!({
         "command": recovery_command,
         "login": false,
@@ -392,6 +391,152 @@ async fn execute_mode_recovers_from_tool_failure_without_user_input() -> Result<
             .function_call_output_text(recovery_call_id)
             .is_some(),
         "fourth request should include the successful recovery tool output"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn execute_mode_injects_stall_recovery_after_repeated_status_update() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let test = test_codex().build(&server).await?;
+
+    let requests = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "Still working on the same verification step."),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "Still working on the same verification step."),
+                ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_assistant_message(
+                    "msg-3",
+                    &format!(
+                        "{TASK_COMPLETE_OPEN_TAG}finished after the stall recovery nudge{TASK_COMPLETE_CLOSE_TAG}"
+                    ),
+                ),
+                ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    let completed =
+        submit_execute_turn(&test, "keep executing instead of repeating status").await?;
+
+    assert_eq!(
+        completed.last_agent_message.as_deref(),
+        Some("finished after the stall recovery nudge")
+    );
+
+    let all_requests = requests.requests();
+    assert_eq!(all_requests.len(), 3);
+    assert!(
+        all_requests[1]
+            .message_input_texts("developer")
+            .iter()
+            .any(|text| text.contains(AUTO_CONTINUE_PREFIX)),
+        "first continuation should still use the generic execute-mode continuation"
+    );
+    assert!(
+        all_requests[2]
+            .message_input_texts("developer")
+            .iter()
+            .any(|text| text.contains(STALL_RECOVERY_PREFIX)),
+        "repeated status update should trigger a stall recovery developer message"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn execute_mode_warns_when_stall_limit_is_hit() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let test = test_codex().build(&server).await?;
+
+    let requests = mount_sse_sequence(
+        &server,
+        (1..=5)
+            .map(|index| {
+                sse(vec![
+                    ev_response_created(&format!("resp-{index}")),
+                    ev_assistant_message(
+                        &format!("msg-{index}"),
+                        "Still working on the same verification step.",
+                    ),
+                    ev_completed(&format!("resp-{index}")),
+                ])
+            })
+            .collect(),
+    )
+    .await;
+
+    let session_model = test.session_configured.model.clone();
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "keep going unless you are actually making no progress".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model.clone(),
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: Some(execute_mode(session_model)),
+            personality: None,
+        })
+        .await?;
+
+    let turn_id = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnStarted(event) => Some(event.turn_id.clone()),
+        _ => None,
+    })
+    .await;
+
+    let warning = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::Warning(event)
+            if event
+                .message
+                .contains("consecutive status-only responses without concrete progress") =>
+        {
+            Some(event.message.clone())
+        }
+        _ => None,
+    })
+    .await;
+    let completed = wait_for_event(&test.codex, |event| match event {
+        EventMsg::TurnComplete(event) => event.turn_id == turn_id,
+        _ => false,
+    })
+    .await;
+
+    assert!(warning.contains("without concrete progress"));
+    let EventMsg::TurnComplete(completed) = completed else {
+        panic!("expected turn complete after warning");
+    };
+    assert_eq!(
+        completed.last_agent_message.as_deref(),
+        Some("Still working on the same verification step.")
+    );
+    assert_eq!(
+        requests.requests().len(),
+        5,
+        "expected the turn to stop on the fifth repeated status response"
     );
 
     Ok(())
@@ -492,13 +637,13 @@ async fn execute_mode_can_finish_a_multi_tool_task_without_user_input() -> Resul
     let create_call_id = "call-create";
     let patch_call_id = "call-patch";
     let verify_call_id = "call-verify";
-    let create_command = format!("printf before > {:?} && cat {:?}", notes_path, notes_path);
+    let create_command = format!("printf before > {notes_path:?} && cat {notes_path:?}");
     let create_args = serde_json::to_string(&json!({
         "command": create_command,
         "login": false,
         "timeout_ms": 1000,
     }))?;
-    let verify_command = format!("cat {:?}", notes_path);
+    let verify_command = format!("cat {notes_path:?}");
     let verify_args = serde_json::to_string(&json!({
         "command": verify_command,
         "login": false,

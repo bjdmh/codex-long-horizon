@@ -318,7 +318,8 @@ impl Expectation {
                 assert_eq!(
                     result.exit_code,
                     Some(0),
-                    "expected successful exit for {path:?}"
+                    "expected successful exit for {path:?}; stdout was: {}",
+                    result.stdout
                 );
                 assert!(
                     result.stdout.contains(content),
@@ -395,8 +396,11 @@ impl Expectation {
                             result.stdout
                         );
                     } else {
+                        let localized_permission_denied = *needle == "Permission denied"
+                            && (result.stdout.contains("权限不够")
+                                || result.stdout.contains("权限不足"));
                         assert!(
-                            result.stdout.contains(needle),
+                            result.stdout.contains(needle) || localized_permission_denied,
                             "stdout missing {needle:?}: {}",
                             result.stdout
                         );
@@ -1322,7 +1326,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             expectation: Expectation::FileNotCreated {
                 target: TargetPath::Workspace("ro_never.txt"),
                 message_contains: if cfg!(target_os = "linux") {
-                    &["Permission denied"]
+                    &["Permission denied|权限不够|权限不足|Operation not permitted"]
                 } else {
                     &[
                         "Permission denied|Operation not permitted|operation not permitted|\
@@ -1913,7 +1917,12 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
             .single_request()
             .function_call_output(call_id_first),
     );
-    assert_eq!(first_output.exit_code.unwrap_or(0), 0);
+    assert_eq!(
+        first_output.exit_code.unwrap_or(0),
+        0,
+        "unexpected first execpolicy output: {}",
+        first_output.stdout
+    );
     assert!(
         first_output.stdout.is_empty(),
         "unexpected stdout: {}",

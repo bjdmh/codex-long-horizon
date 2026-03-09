@@ -1,9 +1,13 @@
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::Verbosity;
+use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelInstructionsVariables;
 use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ModelVisibility;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationMode;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::WebSearchToolType;
@@ -58,15 +62,40 @@ pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> Mo
 }
 
 /// Build a minimal fallback model descriptor for missing/unknown slugs.
+pub(crate) fn is_gpt_5_4_model(slug: &str) -> bool {
+    slug == "gpt-5.4" || slug.ends_with("/gpt-5.4")
+}
+
+pub(crate) fn apply_gpt_5_4_metadata_overrides(model: &mut ModelInfo) {
+    model.default_reasoning_level = Some(ReasoningEffort::Medium);
+    model.supported_reasoning_levels = gpt_5_4_reasoning_presets();
+    model.shell_type = ConfigShellToolType::ShellCommand;
+    model.supports_reasoning_summaries = true;
+    model.default_reasoning_summary = ReasoningSummary::None;
+    model.support_verbosity = true;
+    model.default_verbosity = Some(Verbosity::Low);
+    model.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
+    model.supports_parallel_tool_calls = true;
+}
+
 pub(crate) fn model_info_from_slug(slug: &str) -> ModelInfo {
     warn!("Unknown model {slug} is used. This will use fallback model metadata.");
+    let is_gpt_5_4 = is_gpt_5_4_model(slug);
     ModelInfo {
         slug: slug.to_string(),
         display_name: slug.to_string(),
         description: None,
-        default_reasoning_level: None,
-        supported_reasoning_levels: Vec::new(),
-        shell_type: ConfigShellToolType::Default,
+        default_reasoning_level: is_gpt_5_4.then_some(ReasoningEffort::Medium),
+        supported_reasoning_levels: if is_gpt_5_4 {
+            gpt_5_4_reasoning_presets()
+        } else {
+            Vec::new()
+        },
+        shell_type: if is_gpt_5_4 {
+            ConfigShellToolType::ShellCommand
+        } else {
+            ConfigShellToolType::Default
+        },
         visibility: ModelVisibility::None,
         supported_in_api: true,
         priority: 99,
@@ -74,14 +103,14 @@ pub(crate) fn model_info_from_slug(slug: &str) -> ModelInfo {
         upgrade: None,
         base_instructions: BASE_INSTRUCTIONS.to_string(),
         model_messages: local_personality_messages_for_slug(slug),
-        supports_reasoning_summaries: false,
-        default_reasoning_summary: ReasoningSummary::Auto,
-        support_verbosity: false,
-        default_verbosity: None,
-        apply_patch_tool_type: None,
+        supports_reasoning_summaries: is_gpt_5_4,
+        default_reasoning_summary: ReasoningSummary::None,
+        support_verbosity: is_gpt_5_4,
+        default_verbosity: is_gpt_5_4.then_some(Verbosity::Low),
+        apply_patch_tool_type: is_gpt_5_4.then_some(ApplyPatchToolType::Freeform),
         web_search_tool_type: WebSearchToolType::Text,
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
-        supports_parallel_tool_calls: false,
+        supports_parallel_tool_calls: is_gpt_5_4,
         supports_image_detail_original: false,
         context_window: Some(272_000),
         auto_compact_token_limit: None,
@@ -91,6 +120,27 @@ pub(crate) fn model_info_from_slug(slug: &str) -> ModelInfo {
         prefer_websockets: false,
         used_fallback_model_metadata: true, // this is the fallback model metadata
     }
+}
+
+fn gpt_5_4_reasoning_presets() -> Vec<ReasoningEffortPreset> {
+    vec![
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Low,
+            description: "Balances speed with some reasoning; useful for straightforward queries and short explanations".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Medium,
+            description: "Provides a solid balance of reasoning depth and latency for general-purpose tasks".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::High,
+            description: "Maximizes reasoning depth for complex or ambiguous problems".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::XHigh,
+            description: "Extra high reasoning depth for complex problems".to_string(),
+        },
+    ]
 }
 
 fn local_personality_messages_for_slug(slug: &str) -> Option<ModelMessages> {
@@ -114,6 +164,36 @@ mod tests {
     use super::*;
     use crate::config::test_config;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn gpt_5_4_fallback_infers_codex_friendly_metadata() {
+        let model = model_info_from_slug("gpt-5.4");
+
+        assert_eq!(model.default_reasoning_level, Some(ReasoningEffort::Medium));
+        assert!(model.supports_reasoning_summaries);
+        assert_eq!(
+            model.apply_patch_tool_type,
+            Some(ApplyPatchToolType::Freeform)
+        );
+        assert_eq!(model.shell_type, ConfigShellToolType::ShellCommand);
+        assert_eq!(model.default_verbosity, Some(Verbosity::Low));
+        assert!(model.supports_parallel_tool_calls);
+        assert_eq!(model.default_reasoning_summary, ReasoningSummary::None);
+        assert_eq!(model.supported_reasoning_levels.len(), 4);
+    }
+
+    #[test]
+    fn gpt_5_4_fallback_respects_context_window_override() {
+        let model = model_info_from_slug("gpt-5.4");
+        let mut config = test_config();
+        config.model_context_window = Some(1_000_000);
+        config.model_auto_compact_token_limit = Some(900_000);
+
+        let updated = with_config_overrides(model, &config);
+
+        assert_eq!(updated.context_window, Some(1_000_000));
+        assert_eq!(updated.auto_compact_token_limit, Some(900_000));
+    }
 
     #[test]
     fn reasoning_summaries_override_true_enables_support() {
