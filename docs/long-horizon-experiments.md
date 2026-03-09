@@ -114,6 +114,9 @@ then writes a single combined report, use:
 - `scripts/run-long-horizon-suite.sh`
 - `just long-horizon-suite`
 
+The suite runner also executes the strict health gate at the end and embeds the
+health summary in the final `report.md` output.
+
 By default it runs the benchmark suite 3 times and writes:
 
 - `/tmp/long-horizon-soak/soak-history.jsonl`

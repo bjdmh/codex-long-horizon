@@ -23,6 +23,7 @@ mkdir -p "$WORK_BASE"
 BENCH_DIR="$WORK_BASE/bench"
 SOAK_DIR="$WORK_BASE/soak"
 REPORT_MD="$WORK_BASE/report.md"
+HEALTH_TXT="$WORK_BASE/health.txt"
 
 rm -rf "$BENCH_DIR" "$SOAK_DIR"
 
@@ -31,6 +32,8 @@ CODEX_HOME_DIR="$CODEX_HOME_DIR" WORK_BASE="$BENCH_DIR" BENCHMARK_TIMEOUT_SECS=6
 
 CODEX_HOME_DIR="$CODEX_HOME_DIR" WORK_BASE="$SOAK_DIR" RUNS="$SOAK_RUNS" \
   "$ROOT_DIR/scripts/run-long-horizon-soak.sh"
+
+python3 "$ROOT_DIR/scripts/check-long-horizon-health.py" "$BENCH_DIR" "$SOAK_DIR" > "$HEALTH_TXT"
 
 python3 - <<PY
 import json
@@ -58,6 +61,12 @@ lines = [
 ]
 
 lines.extend((soak_dir / 'soak-summary.md').read_text().splitlines())
+lines.extend([
+    '',
+    '## Health Gate',
+    '',
+])
+lines.extend(Path(${HEALTH_TXT@Q}).read_text().splitlines())
 report.write_text('\n'.join(lines) + '\n', encoding='utf-8')
 PY
 
@@ -70,4 +79,5 @@ printf ' - %s\n' "$SOAK_DIR/soak-history.jsonl"
 if [ -f "$SOAK_DIR/soak-warnings.txt" ]; then
   printf ' - %s\n' "$SOAK_DIR/soak-warnings.txt"
 fi
+printf ' - %s\n' "$HEALTH_TXT"
 printf ' - %s\n' "$REPORT_MD"
