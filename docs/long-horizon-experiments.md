@@ -30,6 +30,12 @@ with:
 That installs the compiler/tooling needed by this repo plus Node 22, pytest,
 and `just`.
 
+To clone an existing CODEX_HOME into an Execute-mode experiment home, run:
+
+- `just long-horizon-home`
+
+You can override `SRC_HOME` and `DST_HOME` when needed.
+
 Use:
 
 - `scripts/run-long-horizon-experiments.sh`

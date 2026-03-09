@@ -95,6 +95,10 @@ long-horizon-prereqs:
     ./scripts/install-long-horizon-prereqs.sh
 
 [no-cd]
+long-horizon-home:
+    ./scripts/create-long-horizon-home.sh
+
+[no-cd]
 long-horizon-history *args:
     python3 ./scripts/summarize-long-horizon-history.py "$@"
 
