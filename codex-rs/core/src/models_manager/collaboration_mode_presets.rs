@@ -58,7 +58,7 @@ fn execute_preset() -> CollaborationModeMask {
         name: ModeKind::Execute.display_name().to_string(),
         mode: Some(ModeKind::Execute),
         model: None,
-        reasoning_effort: Some(Some(ReasoningEffort::High)),
+        reasoning_effort: None,
         developer_instructions: Some(Some(COLLABORATION_MODE_EXECUTE.to_string())),
     }
 }
@@ -121,6 +121,8 @@ fn asking_questions_guidance_message(default_mode_request_user_input: bool) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::config_types::CollaborationMode;
+    use codex_protocol::config_types::Settings;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -135,10 +137,23 @@ mod tests {
             plan_preset().reasoning_effort,
             Some(Some(ReasoningEffort::Medium))
         );
-        assert_eq!(
-            execute_preset().reasoning_effort,
-            Some(Some(ReasoningEffort::High))
-        );
+        assert_eq!(execute_preset().reasoning_effort, None);
+    }
+
+    #[test]
+    fn execute_preset_preserves_existing_reasoning_effort() {
+        let mode = CollaborationMode {
+            mode: ModeKind::Execute,
+            settings: Settings {
+                model: "gpt-5.4".to_string(),
+                reasoning_effort: Some(ReasoningEffort::Low),
+                developer_instructions: None,
+            },
+        };
+
+        let updated = mode.apply_mask(&execute_preset());
+
+        assert_eq!(updated.reasoning_effort(), Some(ReasoningEffort::Low));
     }
 
     #[test]
