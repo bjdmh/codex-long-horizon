@@ -2284,7 +2284,10 @@ impl App {
                     } else if schedules.is_empty() {
                         "Loop summary: no scheduled tasks for this thread.".to_string()
                     } else {
-                        format!("Loop summary: 0 active task(s), {} total record(s).", schedules.len())
+                        format!(
+                            "Loop summary: 0 active task(s), {} total record(s).",
+                            schedules.len()
+                        )
                     };
                     self.chat_widget.add_info_message(summary, None);
                 }
@@ -2344,12 +2347,18 @@ impl App {
                             );
                         } else {
                             for schedule in schedules {
+                                let cadence = if schedule.interval_seconds == 0 {
+                                    "one-shot".to_string()
+                                } else {
+                                    format!("every {}s", schedule.interval_seconds)
+                                };
                                 self.chat_widget.add_info_message(
                                     format!(
-                                        "{} [{}] every {}s next={}",
+                                        "{} [{}] {} {} next={}",
                                         schedule.id,
                                         schedule.status.as_str(),
-                                        schedule.interval_seconds,
+                                        schedule.kind.as_str(),
+                                        cadence,
                                         schedule.next_run_at.to_rfc3339()
                                     ),
                                     None,

@@ -1020,12 +1020,18 @@ fn write_schedule_output(json_mode: bool, schedules: &[ScheduledPrompt]) -> anyh
         return Ok(());
     }
     for schedule in schedules {
+        let cadence = if schedule.interval_seconds == 0 {
+            "one-shot".to_string()
+        } else {
+            format!("every {}s", schedule.interval_seconds)
+        };
         write_stdout_line(
             format!(
-                "{} [{}] every {}s next={} runs={} thread={}",
+                "{} [{}] {} {} next={} runs={} thread={}",
                 schedule.id,
                 schedule.status.as_str(),
-                schedule.interval_seconds,
+                schedule.kind.as_str(),
+                cadence,
                 schedule.next_run_at.to_rfc3339(),
                 schedule.run_count,
                 schedule.thread_id
@@ -1039,6 +1045,7 @@ fn write_schedule_output(json_mode: bool, schedules: &[ScheduledPrompt]) -> anyh
 fn schedule_to_json(schedule: &ScheduledPrompt) -> serde_json::Value {
     serde_json::json!({
         "id": schedule.id,
+        "kind": schedule.kind.as_str(),
         "status": schedule.status.as_str(),
         "thread_id": schedule.thread_id.to_string(),
         "prompt": schedule.prompt,
@@ -1046,6 +1053,8 @@ fn schedule_to_json(schedule: &ScheduledPrompt) -> serde_json::Value {
         "next_run_at": schedule.next_run_at.timestamp(),
         "created_at": schedule.created_at.timestamp(),
         "updated_at": schedule.updated_at.timestamp(),
+        "paused_until": schedule.paused_until.map(|value| value.timestamp()),
+        "completed_at": schedule.completed_at.map(|value| value.timestamp()),
         "last_run_started_at": schedule.last_run_started_at.map(|value| value.timestamp()),
         "last_run_completed_at": schedule.last_run_completed_at.map(|value| value.timestamp()),
         "last_error": schedule.last_error,

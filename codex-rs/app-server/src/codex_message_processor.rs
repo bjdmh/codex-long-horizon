@@ -367,11 +367,14 @@ fn schedule_entry_from_core(schedule: ScheduledPrompt) -> ScheduleEntry {
     ScheduleEntry {
         id: schedule.id,
         thread_id: schedule.thread_id.to_string(),
+        kind: schedule.kind.as_str().to_string(),
         prompt: schedule.prompt,
         interval_seconds: i64::try_from(schedule.interval_seconds).unwrap_or(i64::MAX),
         next_run_at: schedule.next_run_at.timestamp(),
         created_at: schedule.created_at.timestamp(),
         updated_at: schedule.updated_at.timestamp(),
+        paused_until: schedule.paused_until.map(|value| value.timestamp()),
+        completed_at: schedule.completed_at.map(|value| value.timestamp()),
         last_run_started_at: schedule.last_run_started_at.map(|value| value.timestamp()),
         last_run_completed_at: schedule
             .last_run_completed_at

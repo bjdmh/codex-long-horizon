@@ -10206,6 +10206,13 @@
     },
     "ScheduleEntry": {
       "properties": {
+        "completedAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "createdAt": {
           "format": "int64",
           "type": "integer"
@@ -10216,6 +10223,9 @@
         "intervalSeconds": {
           "format": "int64",
           "type": "integer"
+        },
+        "kind": {
+          "type": "string"
         },
         "lastError": {
           "type": [
@@ -10241,6 +10251,13 @@
           "format": "int64",
           "type": "integer"
         },
+        "pausedUntil": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "prompt": {
           "type": "string"
         },
@@ -10263,6 +10280,7 @@
         "createdAt",
         "id",
         "intervalSeconds",
+        "kind",
         "nextRunAt",
         "prompt",
         "runCount",

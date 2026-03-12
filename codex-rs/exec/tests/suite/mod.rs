@@ -8,4 +8,5 @@ mod originator;
 mod output_schema;
 mod resume;
 mod sandbox;
+mod schedule;
 mod server_error_exit;
