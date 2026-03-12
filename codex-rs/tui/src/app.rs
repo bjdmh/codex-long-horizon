@@ -2262,6 +2262,33 @@ impl App {
             AppEvent::RefreshConnectors { force_refetch } => {
                 self.chat_widget.refresh_connectors(force_refetch);
             }
+            AppEvent::ShowLoopStatusSummary { thread_id } => {
+                let Some(scheduled_prompts) = self.scheduled_prompts.clone() else {
+                    return Ok(AppRunControl::Continue);
+                };
+                if let Ok(schedules) = scheduled_prompts.list(Some(&thread_id)).await {
+                    let active = schedules
+                        .iter()
+                        .filter(|schedule| schedule.status.as_str() == "active")
+                        .count();
+                    let next_wakeup = schedules
+                        .iter()
+                        .filter(|schedule| schedule.status.as_str() == "active")
+                        .map(|schedule| schedule.next_run_at)
+                        .min();
+                    let summary = if let Some(next_wakeup) = next_wakeup {
+                        format!(
+                            "Loop summary: {active} active task(s), next wakeup at {}.",
+                            next_wakeup.to_rfc3339()
+                        )
+                    } else if schedules.is_empty() {
+                        "Loop summary: no scheduled tasks for this thread.".to_string()
+                    } else {
+                        format!("Loop summary: 0 active task(s), {} total record(s).", schedules.len())
+                    };
+                    self.chat_widget.add_info_message(summary, None);
+                }
+            }
             AppEvent::CreateLoopSchedule { every, prompt } => {
                 let Some(scheduled_prompts) = self.scheduled_prompts.clone() else {
                     self.chat_widget.add_error_message(

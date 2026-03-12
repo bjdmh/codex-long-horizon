@@ -4126,6 +4126,10 @@ impl ChatWidget {
             }
             SlashCommand::Status => {
                 self.add_status_output();
+                if let Some(thread_id) = self.thread_id {
+                    self.app_event_tx
+                        .send(AppEvent::ShowLoopStatusSummary { thread_id });
+                }
             }
             SlashCommand::DebugConfig => {
                 self.add_debug_config_output();
