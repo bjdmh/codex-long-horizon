@@ -1187,6 +1187,78 @@
             },
             "method": {
               "enum": [
+                "schedule/create"
+              ],
+              "title": "Schedule/createRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ScheduleCreateParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Schedule/createRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "schedule/list"
+              ],
+              "title": "Schedule/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ScheduleListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Schedule/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "schedule/cancel"
+              ],
+              "title": "Schedule/cancelRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ScheduleCancelParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Schedule/cancelRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "skills/list"
               ],
               "title": "Skills/listRequestMethod",
@@ -10069,6 +10141,164 @@
           "type": "array"
         }
       },
+      "type": "object"
+    },
+    "ScheduleCancelParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "scheduleId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "scheduleId"
+      ],
+      "title": "ScheduleCancelParams",
+      "type": "object"
+    },
+    "ScheduleCancelResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "cancelled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "cancelled"
+      ],
+      "title": "ScheduleCancelResponse",
+      "type": "object"
+    },
+    "ScheduleCreateParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "intervalSeconds": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "intervalSeconds",
+        "prompt",
+        "threadId"
+      ],
+      "title": "ScheduleCreateParams",
+      "type": "object"
+    },
+    "ScheduleCreateResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "schedule": {
+          "$ref": "#/definitions/ScheduleEntry"
+        }
+      },
+      "required": [
+        "schedule"
+      ],
+      "title": "ScheduleCreateResponse",
+      "type": "object"
+    },
+    "ScheduleEntry": {
+      "properties": {
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        },
+        "intervalSeconds": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "lastError": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lastRunCompletedAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "lastRunStartedAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "nextRunAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "runCount": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "status": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "createdAt",
+        "id",
+        "intervalSeconds",
+        "nextRunAt",
+        "prompt",
+        "runCount",
+        "status",
+        "threadId",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
+    "ScheduleListParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "ScheduleListParams",
+      "type": "object"
+    },
+    "ScheduleListResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/definitions/ScheduleEntry"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "title": "ScheduleListResponse",
       "type": "object"
     },
     "ServerNotification": {

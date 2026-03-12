@@ -1,0 +1,83 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ScheduleEntry": {
+      "properties": {
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        },
+        "intervalSeconds": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "lastError": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lastRunCompletedAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "lastRunStartedAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "nextRunAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "runCount": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "status": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "createdAt",
+        "id",
+        "intervalSeconds",
+        "nextRunAt",
+        "prompt",
+        "runCount",
+        "status",
+        "threadId",
+        "updatedAt"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "schedule": {
+      "$ref": "#/definitions/ScheduleEntry"
+    }
+  },
+  "required": [
+    "schedule"
+  ],
+  "title": "ScheduleCreateResponse",
+  "type": "object"
+}

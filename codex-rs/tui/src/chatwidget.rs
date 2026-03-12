@@ -305,6 +305,110 @@ const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_STATUS_LINE_ITEMS: [&str; 3] =
     ["model-with-reasoning", "context-remaining", "current-dir"];
+
+#[derive(Debug)]
+enum LoopCommandAction {
+    Create { every: Duration, prompt: String },
+    List,
+    Cancel { schedule_id: String },
+}
+
+fn parse_loop_command_args(args: &str) -> Result<LoopCommandAction, String> {
+    let trimmed = args.trim();
+    if trimmed.eq_ignore_ascii_case("list") {
+        return Ok(LoopCommandAction::List);
+    }
+    if let Some(rest) = trimmed.strip_prefix("cancel ") {
+        let schedule_id = rest.trim();
+        if schedule_id.is_empty() {
+            return Err("Usage: /loop cancel <id>".to_string());
+        }
+        return Ok(LoopCommandAction::Cancel {
+            schedule_id: schedule_id.to_string(),
+        });
+    }
+
+    let mut parts = trimmed.splitn(2, char::is_whitespace);
+    let Some(interval) = parts.next() else {
+        return Err("Usage: /loop <interval> <prompt>".to_string());
+    };
+    let Some(prompt) = parts
+        .next()
+        .map(str::trim)
+        .filter(|prompt| !prompt.is_empty())
+    else {
+        return Err("Usage: /loop <interval> <prompt>".to_string());
+    };
+    let every = parse_loop_interval(interval)?;
+    Ok(LoopCommandAction::Create {
+        every,
+        prompt: prompt.to_string(),
+    })
+}
+
+fn parse_loop_interval(value: &str) -> Result<Duration, String> {
+    let split_at = value
+        .find(|ch: char| !ch.is_ascii_digit())
+        .unwrap_or(value.len());
+    let (number, suffix) = value.split_at(split_at);
+    if number.is_empty() {
+        return Err("Interval must start with a positive integer.".to_string());
+    }
+    let quantity = number
+        .parse::<u64>()
+        .map_err(|_| "Invalid interval quantity.".to_string())?;
+    let seconds = match suffix {
+        "" | "s" => quantity,
+        "m" => quantity.saturating_mul(60),
+        "h" => quantity.saturating_mul(60 * 60),
+        "d" => quantity.saturating_mul(60 * 60 * 24),
+        _ => {
+            return Err("Interval suffix must be one of s, m, h, or d.".to_string());
+        }
+    };
+    if seconds == 0 {
+        return Err("Interval must be greater than zero.".to_string());
+    }
+    Ok(Duration::from_secs(seconds))
+}
+
+#[cfg(test)]
+mod loop_command_tests {
+    use super::LoopCommandAction;
+    use super::parse_loop_command_args;
+    use pretty_assertions::assert_eq;
+    use std::time::Duration;
+
+    #[test]
+    fn parses_loop_create_args() {
+        let action = parse_loop_command_args("10m check deployment").expect("parse create");
+        match action {
+            LoopCommandAction::Create { every, prompt } => {
+                assert_eq!(every, Duration::from_secs(600));
+                assert_eq!(prompt, "check deployment");
+            }
+            other => panic!("expected create action, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_loop_list_args() {
+        let action = parse_loop_command_args("list").expect("parse list");
+        assert!(matches!(action, LoopCommandAction::List));
+    }
+
+    #[test]
+    fn parses_loop_cancel_args() {
+        let action = parse_loop_command_args("cancel job-123").expect("parse cancel");
+        match action {
+            LoopCommandAction::Cancel { schedule_id } => {
+                assert_eq!(schedule_id, "job-123");
+            }
+            other => panic!("expected cancel action, got {other:?}"),
+        }
+    }
+}
+
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
@@ -3823,6 +3927,12 @@ impl ChatWidget {
             SlashCommand::Review => {
                 self.open_review_popup();
             }
+            SlashCommand::Loop => {
+                self.add_info_message(
+                    "Usage: /loop <interval> <prompt> | /loop list | /loop cancel <id>".to_string(),
+                    None,
+                );
+            }
             SlashCommand::Rename => {
                 self.otel_manager.counter("codex.thread.rename", 1, &[]);
                 self.show_rename_prompt();
@@ -4201,6 +4311,31 @@ impl ChatWidget {
                         user_facing_hint: None,
                     },
                 });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::Loop if !trimmed.is_empty() => {
+                let Some((prepared_args, _prepared_elements)) =
+                    self.bottom_pane.prepare_inline_args_submission(false)
+                else {
+                    return;
+                };
+                match parse_loop_command_args(&prepared_args) {
+                    Ok(LoopCommandAction::Create { every, prompt }) => {
+                        self.app_event_tx
+                            .send(AppEvent::CreateLoopSchedule { every, prompt });
+                    }
+                    Ok(LoopCommandAction::List) => {
+                        self.app_event_tx.send(AppEvent::ListLoopSchedules);
+                    }
+                    Ok(LoopCommandAction::Cancel { schedule_id }) => {
+                        self.app_event_tx
+                            .send(AppEvent::CancelLoopSchedule { schedule_id });
+                    }
+                    Err(err) => {
+                        self.add_error_message(err);
+                        return;
+                    }
+                }
                 self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {

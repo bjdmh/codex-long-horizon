@@ -1804,6 +1804,69 @@ pub struct CommandExecResponse {
     pub stderr: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ScheduleEntry {
+    pub id: String,
+    pub thread_id: String,
+    pub prompt: String,
+    pub interval_seconds: i64,
+    pub next_run_at: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub last_run_started_at: Option<i64>,
+    pub last_run_completed_at: Option<i64>,
+    pub last_error: Option<String>,
+    pub run_count: i64,
+    pub status: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ScheduleCreateParams {
+    pub thread_id: String,
+    pub prompt: String,
+    pub interval_seconds: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ScheduleCreateResponse {
+    pub schedule: ScheduleEntry,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ScheduleListParams {
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ScheduleListResponse {
+    pub data: Vec<ScheduleEntry>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ScheduleCancelParams {
+    pub schedule_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ScheduleCancelResponse {
+    pub cancelled: bool,
+}
+
 // === Threads, Turns, and Items ===
 // Thread APIs
 #[derive(

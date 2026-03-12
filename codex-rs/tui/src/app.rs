@@ -54,6 +54,7 @@ use codex_core::models_manager::collaboration_mode_presets::CollaborationModesCo
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
+use codex_core::scheduled_prompts::ScheduledPromptRuntime;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::OtelManager;
@@ -642,6 +643,7 @@ pub(crate) struct App {
     harness_overrides: ConfigOverrides,
     runtime_approval_policy_override: Option<AskForApproval>,
     runtime_sandbox_policy_override: Option<SandboxPolicy>,
+    scheduled_prompts: Option<Arc<ScheduledPromptRuntime>>,
 
     pub(crate) file_search: FileSearchManager,
 
@@ -1558,6 +1560,28 @@ impl App {
                     .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
             },
         ));
+        let scheduled_prompts = match ScheduledPromptRuntime::new(
+            config.sqlite_home.clone(),
+            config.model_provider_id.clone(),
+            thread_manager.clone(),
+            auth_manager.clone(),
+            config.clone(),
+        )
+        .await
+        {
+            Ok(runtime) => {
+                runtime.start();
+                Some(runtime)
+            }
+            Err(err) => {
+                app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    history_cell::new_warning_event(format!(
+                        "Scheduled prompts are unavailable: {err}"
+                    )),
+                )));
+                None
+            }
+        };
         let mut model = thread_manager
             .get_models_manager()
             .get_default_model(&config.model, RefreshStrategy::Offline)
@@ -1742,6 +1766,7 @@ impl App {
             harness_overrides,
             runtime_approval_policy_override: None,
             runtime_sandbox_policy_override: None,
+            scheduled_prompts,
             file_search,
             enhanced_keys_supported,
             transcript_cells: Vec::new(),
@@ -2236,6 +2261,105 @@ impl App {
             }
             AppEvent::RefreshConnectors { force_refetch } => {
                 self.chat_widget.refresh_connectors(force_refetch);
+            }
+            AppEvent::CreateLoopSchedule { every, prompt } => {
+                let Some(scheduled_prompts) = self.scheduled_prompts.clone() else {
+                    self.chat_widget.add_error_message(
+                        "Scheduled prompts are unavailable in this session.".to_string(),
+                    );
+                    return Ok(AppRunControl::Continue);
+                };
+                let Some(thread_id) = self.chat_widget.thread_id() else {
+                    self.chat_widget.add_error_message(
+                        "The active thread is not ready for scheduling yet.".to_string(),
+                    );
+                    return Ok(AppRunControl::Continue);
+                };
+                match scheduled_prompts
+                    .create_for_thread(thread_id, every, prompt)
+                    .await
+                {
+                    Ok(schedule) => {
+                        self.chat_widget.add_info_message(
+                            format!(
+                                "Scheduled prompt {} created; next run at {}.",
+                                schedule.id,
+                                schedule.next_run_at.to_rfc3339()
+                            ),
+                            None,
+                        );
+                    }
+                    Err(err) => {
+                        self.chat_widget
+                            .add_error_message(format!("Failed to create scheduled prompt: {err}"));
+                    }
+                }
+            }
+            AppEvent::ListLoopSchedules => {
+                let Some(scheduled_prompts) = self.scheduled_prompts.clone() else {
+                    self.chat_widget.add_error_message(
+                        "Scheduled prompts are unavailable in this session.".to_string(),
+                    );
+                    return Ok(AppRunControl::Continue);
+                };
+                let Some(thread_id) = self.chat_widget.thread_id() else {
+                    self.chat_widget.add_error_message(
+                        "The active thread is not ready for scheduling yet.".to_string(),
+                    );
+                    return Ok(AppRunControl::Continue);
+                };
+                match scheduled_prompts.list(Some(&thread_id)).await {
+                    Ok(schedules) => {
+                        if schedules.is_empty() {
+                            self.chat_widget.add_info_message(
+                                "No scheduled prompts for this thread.".to_string(),
+                                None,
+                            );
+                        } else {
+                            for schedule in schedules {
+                                self.chat_widget.add_info_message(
+                                    format!(
+                                        "{} [{}] every {}s next={}",
+                                        schedule.id,
+                                        schedule.status.as_str(),
+                                        schedule.interval_seconds,
+                                        schedule.next_run_at.to_rfc3339()
+                                    ),
+                                    None,
+                                );
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        self.chat_widget
+                            .add_error_message(format!("Failed to list scheduled prompts: {err}"));
+                    }
+                }
+            }
+            AppEvent::CancelLoopSchedule { schedule_id } => {
+                let Some(scheduled_prompts) = self.scheduled_prompts.clone() else {
+                    self.chat_widget.add_error_message(
+                        "Scheduled prompts are unavailable in this session.".to_string(),
+                    );
+                    return Ok(AppRunControl::Continue);
+                };
+                match scheduled_prompts.cancel(schedule_id.as_str()).await {
+                    Ok(true) => {
+                        self.chat_widget.add_info_message(
+                            format!("Cancelled scheduled prompt {schedule_id}."),
+                            None,
+                        );
+                    }
+                    Ok(false) => {
+                        self.chat_widget.add_error_message(format!(
+                            "Scheduled prompt {schedule_id} was not found or already cancelled."
+                        ));
+                    }
+                    Err(err) => {
+                        self.chat_widget
+                            .add_error_message(format!("Failed to cancel scheduled prompt: {err}"));
+                    }
+                }
             }
             AppEvent::StartFileSearch(query) => {
                 self.file_search.on_user_query(query);
@@ -5262,6 +5386,7 @@ mod tests {
             harness_overrides: ConfigOverrides::default(),
             runtime_approval_policy_override: None,
             runtime_sandbox_policy_override: None,
+            scheduled_prompts: None,
             file_search,
             transcript_cells: Vec::new(),
             overlay: None,
@@ -5322,6 +5447,7 @@ mod tests {
                 harness_overrides: ConfigOverrides::default(),
                 runtime_approval_policy_override: None,
                 runtime_sandbox_policy_override: None,
+                scheduled_prompts: None,
                 file_search,
                 transcript_cells: Vec::new(),
                 overlay: None,

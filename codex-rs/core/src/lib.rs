@@ -60,6 +60,7 @@ pub mod personality_migration;
 pub mod plugins;
 mod sandbox_tags;
 pub mod sandboxing;
+pub mod scheduled_prompts;
 mod session_prefix;
 mod shell_detect;
 mod stream_events_utils;

@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "intervalSeconds": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "prompt": {
+      "type": "string"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "intervalSeconds",
+    "prompt",
+    "threadId"
+  ],
+  "title": "ScheduleCreateParams",
+  "type": "object"
+}

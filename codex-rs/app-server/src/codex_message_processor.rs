@@ -86,6 +86,13 @@ use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget as ApiReviewTarget;
 use codex_app_server_protocol::SandboxMode;
+use codex_app_server_protocol::ScheduleCancelParams;
+use codex_app_server_protocol::ScheduleCancelResponse;
+use codex_app_server_protocol::ScheduleCreateParams;
+use codex_app_server_protocol::ScheduleCreateResponse;
+use codex_app_server_protocol::ScheduleEntry;
+use codex_app_server_protocol::ScheduleListParams;
+use codex_app_server_protocol::ScheduleListResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
 use codex_app_server_protocol::SkillsConfigWriteParams;
@@ -204,6 +211,8 @@ use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::rollout_date_parts;
 use codex_core::sandboxing::SandboxPermissions;
+use codex_core::scheduled_prompts::ScheduledPrompt;
+use codex_core::scheduled_prompts::ScheduledPromptRuntime;
 use codex_core::skills::remote::export_remote_skill;
 use codex_core::skills::remote::list_remote_skills;
 use codex_core::state_db::StateDbHandle;
@@ -266,6 +275,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::SystemTime;
 use tokio::sync::Mutex;
+use tokio::sync::OnceCell;
 use tokio::sync::broadcast;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
@@ -337,6 +347,41 @@ fn convert_remote_product_surface(product_surface: ApiProductSurface) -> RemoteS
     }
 }
 
+fn invalid_request(message: String) -> JSONRPCErrorError {
+    JSONRPCErrorError {
+        code: INVALID_REQUEST_ERROR_CODE,
+        message,
+        data: None,
+    }
+}
+
+fn internal_error(message: String) -> JSONRPCErrorError {
+    JSONRPCErrorError {
+        code: INTERNAL_ERROR_CODE,
+        message,
+        data: None,
+    }
+}
+
+fn schedule_entry_from_core(schedule: ScheduledPrompt) -> ScheduleEntry {
+    ScheduleEntry {
+        id: schedule.id,
+        thread_id: schedule.thread_id.to_string(),
+        prompt: schedule.prompt,
+        interval_seconds: i64::try_from(schedule.interval_seconds).unwrap_or(i64::MAX),
+        next_run_at: schedule.next_run_at.timestamp(),
+        created_at: schedule.created_at.timestamp(),
+        updated_at: schedule.updated_at.timestamp(),
+        last_run_started_at: schedule.last_run_started_at.map(|value| value.timestamp()),
+        last_run_completed_at: schedule
+            .last_run_completed_at
+            .map(|value| value.timestamp()),
+        last_error: schedule.last_error,
+        run_count: i64::try_from(schedule.run_count).unwrap_or(i64::MAX),
+        status: schedule.status.as_str().to_string(),
+    }
+}
+
 impl Drop for ActiveLogin {
     fn drop(&mut self) {
         self.shutdown_handle.shutdown();
@@ -360,6 +405,7 @@ pub(crate) struct CodexMessageProcessor {
     fuzzy_search_sessions: Arc<Mutex<HashMap<String, FuzzyFileSearchSession>>>,
     feedback: CodexFeedback,
     log_db: Option<LogDbLayer>,
+    scheduled_prompts: Arc<OnceCell<Arc<ScheduledPromptRuntime>>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -405,6 +451,31 @@ impl CodexMessageProcessor {
             auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
             plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
         }
+    }
+
+    async fn scheduled_prompts_runtime(
+        &self,
+    ) -> Result<Arc<ScheduledPromptRuntime>, JSONRPCErrorError> {
+        self.scheduled_prompts
+            .get_or_try_init(|| async {
+                let runtime = ScheduledPromptRuntime::new(
+                    self.config.sqlite_home.clone(),
+                    self.config.model_provider_id.clone(),
+                    Arc::clone(&self.thread_manager),
+                    Arc::clone(&self.auth_manager),
+                    self.config.as_ref().clone(),
+                )
+                .await
+                .map_err(|err| {
+                    internal_error(format!(
+                        "failed to initialize scheduled prompts runtime: {err}"
+                    ))
+                })?;
+                runtime.start();
+                Ok(runtime)
+            })
+            .await
+            .cloned()
     }
 
     async fn load_thread(
@@ -458,6 +529,7 @@ impl CodexMessageProcessor {
             fuzzy_search_sessions: Arc::new(Mutex::new(HashMap::new())),
             feedback,
             log_db,
+            scheduled_prompts: Arc::new(OnceCell::new()),
         }
     }
 
@@ -640,6 +712,18 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadRead { request_id, params } => {
                 self.thread_read(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ScheduleCreate { request_id, params } => {
+                self.schedule_create(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ScheduleList { request_id, params } => {
+                self.schedule_list(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ScheduleCancel { request_id, params } => {
+                self.schedule_cancel(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::SkillsList { request_id, params } => {
@@ -928,6 +1012,133 @@ impl CodexMessageProcessor {
             }
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn schedule_create(
+        &mut self,
+        request_id: ConnectionRequestId,
+        params: ScheduleCreateParams,
+    ) {
+        let scheduled_prompts = match self.scheduled_prompts_runtime().await {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+                return;
+            }
+        };
+        if params.interval_seconds <= 0 {
+            self.outgoing
+                .send_error(
+                    request_id,
+                    invalid_request("intervalSeconds must be greater than zero".to_string()),
+                )
+                .await;
+            return;
+        }
+        let thread_id = match ThreadId::from_string(&params.thread_id) {
+            Ok(thread_id) => thread_id,
+            Err(err) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        invalid_request(format!("invalid thread id: {err}")),
+                    )
+                    .await;
+                return;
+            }
+        };
+        match scheduled_prompts
+            .create_for_thread(
+                thread_id,
+                Duration::from_secs(params.interval_seconds as u64),
+                params.prompt,
+            )
+            .await
+        {
+            Ok(schedule) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        ScheduleCreateResponse {
+                            schedule: schedule_entry_from_core(schedule),
+                        },
+                    )
+                    .await;
+            }
+            Err(err) => {
+                self.outgoing
+                    .send_error(request_id, invalid_request(err.to_string()))
+                    .await;
+            }
+        }
+    }
+
+    async fn schedule_list(&mut self, request_id: ConnectionRequestId, params: ScheduleListParams) {
+        let scheduled_prompts = match self.scheduled_prompts_runtime().await {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+                return;
+            }
+        };
+        let thread_id = match params.thread_id {
+            Some(thread_id) => match ThreadId::from_string(&thread_id) {
+                Ok(thread_id) => Some(thread_id),
+                Err(err) => {
+                    self.outgoing
+                        .send_error(
+                            request_id,
+                            invalid_request(format!("invalid thread id: {err}")),
+                        )
+                        .await;
+                    return;
+                }
+            },
+            None => None,
+        };
+        match scheduled_prompts.list(thread_id.as_ref()).await {
+            Ok(data) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        ScheduleListResponse {
+                            data: data.into_iter().map(schedule_entry_from_core).collect(),
+                        },
+                    )
+                    .await;
+            }
+            Err(err) => {
+                self.outgoing
+                    .send_error(request_id, internal_error(err.to_string()))
+                    .await;
+            }
+        }
+    }
+
+    async fn schedule_cancel(
+        &mut self,
+        request_id: ConnectionRequestId,
+        params: ScheduleCancelParams,
+    ) {
+        let scheduled_prompts = match self.scheduled_prompts_runtime().await {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+                return;
+            }
+        };
+        match scheduled_prompts.cancel(&params.schedule_id).await {
+            Ok(cancelled) => {
+                self.outgoing
+                    .send_response(request_id, ScheduleCancelResponse { cancelled })
+                    .await;
+            }
+            Err(err) => {
+                self.outgoing
+                    .send_error(request_id, internal_error(err.to_string()))
+                    .await;
             }
         }
     }

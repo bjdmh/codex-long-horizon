@@ -1741,7 +1741,9 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::JsReplHandler;
     use crate::tools::handlers::JsReplResetHandler;
+    use crate::tools::handlers::LOOP_CONTROL_TOOL;
     use crate::tools::handlers::ListDirHandler;
+    use crate::tools::handlers::LoopControlHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
     use crate::tools::handlers::MultiAgentHandler;
@@ -1761,6 +1763,7 @@ pub(crate) fn build_specs(
     let shell_handler = Arc::new(ShellHandler);
     let unified_exec_handler = Arc::new(UnifiedExecHandler);
     let plan_handler = Arc::new(PlanHandler);
+    let loop_control_handler = Arc::new(LoopControlHandler);
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
     let dynamic_tool_handler = Arc::new(DynamicToolHandler);
     let view_image_handler = Arc::new(ViewImageHandler);
@@ -1825,6 +1828,8 @@ pub(crate) fn build_specs(
 
     builder.push_spec(PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);
+    builder.push_spec(LOOP_CONTROL_TOOL.clone());
+    builder.register_handler("loop", loop_control_handler);
 
     if config.js_repl_enabled {
         builder.push_spec(create_js_repl_tool());

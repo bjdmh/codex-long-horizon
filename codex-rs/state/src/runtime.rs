@@ -52,6 +52,7 @@ mod agent_jobs;
 mod backfill;
 mod logs;
 mod memories;
+mod scheduled_prompts;
 #[cfg(test)]
 mod test_support;
 mod threads;

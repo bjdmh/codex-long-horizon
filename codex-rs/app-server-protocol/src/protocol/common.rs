@@ -244,6 +244,18 @@ client_request_definitions! {
         params: v2::ThreadReadParams,
         response: v2::ThreadReadResponse,
     },
+    ScheduleCreate => "schedule/create" {
+        params: v2::ScheduleCreateParams,
+        response: v2::ScheduleCreateResponse,
+    },
+    ScheduleList => "schedule/list" {
+        params: v2::ScheduleListParams,
+        response: v2::ScheduleListResponse,
+    },
+    ScheduleCancel => "schedule/cancel" {
+        params: v2::ScheduleCancelParams,
+        response: v2::ScheduleCancelResponse,
+    },
     SkillsList => "skills/list" {
         params: v2::SkillsListParams,
         response: v2::SkillsListResponse,

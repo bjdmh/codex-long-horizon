@@ -9,6 +9,7 @@
 //! quits without reaching into the app loop or coupling to shutdown/exit sequencing.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use codex_chatgpt::connectors::AppInfo;
 use codex_file_search::FileMatch;
@@ -134,6 +135,20 @@ pub(crate) enum AppEvent {
     ConnectorsLoaded {
         result: Result<ConnectorsSnapshot, String>,
         is_final: bool,
+    },
+
+    /// Create a recurring scheduled prompt for the active thread.
+    CreateLoopSchedule {
+        every: Duration,
+        prompt: String,
+    },
+
+    /// List scheduled prompts for the active thread.
+    ListLoopSchedules,
+
+    /// Cancel a scheduled prompt by id.
+    CancelLoopSchedule {
+        schedule_id: String,
     },
 
     /// Result of computing a `/diff` command.
