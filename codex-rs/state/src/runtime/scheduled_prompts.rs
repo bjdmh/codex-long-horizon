@@ -147,7 +147,7 @@ ORDER BY created_at DESC, id DESC
         let result = sqlx::query(
             r#"
 UPDATE scheduled_prompts
-SET cancelled_at = COALESCE(cancelled_at, ?), updated_at = ?, lease_owner = NULL, lease_until = NULL
+SET cancelled_at = COALESCE(cancelled_at, ?), updated_at = ?
 WHERE id = ? AND cancelled_at IS NULL
             "#,
         )

@@ -282,8 +282,36 @@ impl ScheduledPromptRuntime {
 
 fn build_scheduled_user_turn(snapshot: &ThreadConfigSnapshot, job: &ScheduledPrompt) -> Op {
     let prompt = format!(
-        "You are resuming a scheduled long-running task.\nCurrent schedule id: {}\nCurrent repeat interval: {} seconds\nCurrent objective/state:\n{}\n\nAfter checking the current situation, explicitly decide what happens next:\n- If monitoring should continue, call the `loop` tool with action=`continue`, this schedule_id, a next_delay_seconds value, and optionally an updated next_prompt.\n- If monitoring should stop, call the `loop` tool with action=`stop` and this schedule_id.\n- Do not use shell loops, sleep loops, cron, or external timers.\n- Prefer bounded observations each wakeup.\n",
-        job.id, job.interval_seconds, job.prompt
+        "You are resuming a scheduled long-running task.\n\n\
+Schedule id: {schedule_id}\n\
+Current repeat interval: {interval_seconds} seconds\n\
+Completed wakeups so far: {run_count}\n\n\
+Current objective/state:\n\
+{objective}\n\n\
+You must treat this wakeup as a state-machine step.\n\
+Before you finish, you must call the `loop` tool exactly once to choose the next state.\n\n\
+Allowed choices:\n\
+1. Continue monitoring:\n\
+   - Call `loop` with action=`continue`\n\
+   - Pass this exact schedule_id\n\
+   - Set next_delay_seconds to the next wakeup delay\n\
+   - Optionally set next_prompt to an updated compact objective/state for the next wakeup\n\
+2. Stop monitoring:\n\
+   - Call `loop` with action=`stop`\n\
+   - Pass this exact schedule_id\n\n\
+Important rules:\n\
+- Call `loop` exactly once per wakeup.\n\
+- Do not use shell loops, sleep loops, cron, or external timers.\n\
+- Prefer bounded observations each wakeup.\n\
+- If you continue, keep next_prompt short and operational.\n\
+- After the `loop` call, end with a concise final answer wrapped in <task_complete>...</task_complete>.\n\n\
+Examples:\n\
+- Continue: {{\"action\":\"continue\",\"schedule_id\":\"{schedule_id}\",\"next_delay_seconds\":30,\"next_prompt\":\"Check the latest 200 log lines; stop if no errors for 3 checks.\"}}\n\
+- Stop: {{\"action\":\"stop\",\"schedule_id\":\"{schedule_id}\"}}\n",
+        schedule_id = job.id,
+        interval_seconds = job.interval_seconds,
+        run_count = job.run_count,
+        objective = job.prompt
     );
     Op::UserTurn {
         items: vec![UserInput::Text {
