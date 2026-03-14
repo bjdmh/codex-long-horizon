@@ -18,7 +18,6 @@ pub use model::Phase2InputSelection;
 pub use model::Phase2JobClaimOutcome;
 pub use model::ScheduledPrompt;
 pub use model::ScheduledPromptCreateParams;
-pub use model::ScheduledPromptKind;
 pub use model::ScheduledPromptStatus;
 /// Preferred entrypoint: owns configuration and metrics.
 pub use runtime::StateRuntime;

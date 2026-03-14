@@ -26,7 +26,6 @@ pub use memories::Stage1OutputRef;
 pub use memories::Stage1StartupClaimParams;
 pub use scheduled_prompt::ScheduledPrompt;
 pub use scheduled_prompt::ScheduledPromptCreateParams;
-pub use scheduled_prompt::ScheduledPromptKind;
 pub use scheduled_prompt::ScheduledPromptStatus;
 pub use thread_metadata::Anchor;
 pub use thread_metadata::BackfillStats;

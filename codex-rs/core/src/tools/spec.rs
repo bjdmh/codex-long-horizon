@@ -1750,8 +1750,6 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::ReadFileHandler;
     use crate::tools::handlers::RequestUserInputHandler;
-    use crate::tools::handlers::SCHEDULE_TOOL;
-    use crate::tools::handlers::ScheduleHandler;
     use crate::tools::handlers::SearchToolBm25Handler;
     use crate::tools::handlers::ShellCommandHandler;
     use crate::tools::handlers::ShellHandler;
@@ -1766,7 +1764,6 @@ pub(crate) fn build_specs(
     let unified_exec_handler = Arc::new(UnifiedExecHandler);
     let plan_handler = Arc::new(PlanHandler);
     let loop_control_handler = Arc::new(LoopControlHandler);
-    let schedule_handler = Arc::new(ScheduleHandler);
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
     let dynamic_tool_handler = Arc::new(DynamicToolHandler);
     let view_image_handler = Arc::new(ViewImageHandler);
@@ -1831,8 +1828,6 @@ pub(crate) fn build_specs(
 
     builder.push_spec(PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);
-    builder.push_spec(SCHEDULE_TOOL.clone());
-    builder.register_handler("schedule", schedule_handler);
     builder.push_spec(LOOP_CONTROL_TOOL.clone());
     builder.register_handler("loop", loop_control_handler);
 

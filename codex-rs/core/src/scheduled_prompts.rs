@@ -21,14 +21,12 @@ use crate::find_thread_path_by_id_str;
 use crate::read_session_meta_line;
 
 pub use codex_state::ScheduledPrompt;
-pub use codex_state::ScheduledPromptKind;
 pub use codex_state::ScheduledPromptStatus;
 
 const SCHEDULED_PROMPT_TICK: Duration = Duration::from_secs(5);
 const SCHEDULED_PROMPT_LEASE_SECONDS: i64 = 60;
 const SCHEDULED_PROMPT_CLAIM_LIMIT: usize = 8;
 const SCHEDULED_PROMPT_RUN_TIMEOUT: Duration = Duration::from_secs(60 * 30);
-const SCHEDULED_TASK_RETRY_DELAY: Duration = Duration::from_secs(60 * 5);
 
 #[derive(Clone)]
 pub struct ScheduledPromptRuntime {
@@ -84,19 +82,6 @@ impl ScheduledPromptRuntime {
             .await
     }
 
-    pub async fn create_task_for_thread(
-        &self,
-        thread_id: ThreadId,
-        run_at: chrono::DateTime<Utc>,
-        prompt: String,
-    ) -> anyhow::Result<ScheduledPrompt> {
-        let rollout_path = self.resolve_rollout_path(thread_id).await?.ok_or_else(|| {
-            anyhow::anyhow!("thread {thread_id} does not have a persistent rollout")
-        })?;
-        self.create_task_for_rollout(thread_id, rollout_path, run_at, prompt)
-            .await
-    }
-
     pub async fn create_for_rollout(
         &self,
         thread_id: ThreadId,
@@ -120,32 +105,9 @@ impl ScheduledPromptRuntime {
             id: Uuid::new_v4().to_string(),
             thread_id,
             rollout_path,
-            kind: codex_state::ScheduledPromptKind::Loop,
             prompt,
             interval_seconds,
             next_run_at,
-        };
-        self.state_db.create_scheduled_prompt(&params).await
-    }
-
-    pub async fn create_task_for_rollout(
-        &self,
-        thread_id: ThreadId,
-        rollout_path: PathBuf,
-        run_at: chrono::DateTime<Utc>,
-        prompt: String,
-    ) -> anyhow::Result<ScheduledPrompt> {
-        if prompt.trim().is_empty() {
-            return Err(anyhow::anyhow!("scheduled task cannot be empty"));
-        }
-        let params = codex_state::ScheduledPromptCreateParams {
-            id: Uuid::new_v4().to_string(),
-            thread_id,
-            rollout_path,
-            kind: codex_state::ScheduledPromptKind::Task,
-            prompt,
-            interval_seconds: 0,
-            next_run_at: run_at,
         };
         self.state_db.create_scheduled_prompt(&params).await
     }
@@ -213,7 +175,7 @@ impl ScheduledPromptRuntime {
                 };
                 let mut config = (*self.base_config).clone();
                 if let Ok(meta_line) = read_session_meta_line(&rollout_path).await {
-                    config.cwd = meta_line.meta.cwd;
+                    config.cwd = meta_line.meta.cwd.clone();
                 }
                 self.thread_manager
                     .resume_thread_from_rollout(
@@ -277,21 +239,9 @@ impl ScheduledPromptRuntime {
             .as_ref()
             .is_some_and(|schedule| schedule.updated_at > job.updated_at);
         let error_message = if error_message.is_none() && !made_loop_decision {
-            match job.kind {
-                codex_state::ScheduledPromptKind::Loop => {
-                    let message =
-                        "scheduled run completed without calling the loop tool".to_string();
-                    let _ = self.state_db.cancel_scheduled_prompt(job.id.as_str()).await;
-                    Some(message)
-                }
-                codex_state::ScheduledPromptKind::Task => {
-                    let _ = self
-                        .state_db
-                        .complete_scheduled_prompt(job.id.as_str())
-                        .await;
-                    None
-                }
-            }
+            let message = "scheduled run completed without calling the loop tool".to_string();
+            let _ = self.state_db.cancel_scheduled_prompt(job.id.as_str()).await;
+            Some(message)
         } else {
             error_message
         };
@@ -314,20 +264,8 @@ impl ScheduledPromptRuntime {
             .state_db
             .get_scheduled_prompt(job.id.as_str())
             .await?
-            .map(|schedule| {
-                if schedule.interval_seconds == 0 {
-                    SCHEDULED_TASK_RETRY_DELAY.as_secs()
-                } else {
-                    schedule.interval_seconds
-                }
-            })
-            .unwrap_or_else(|| {
-                if job.interval_seconds == 0 {
-                    SCHEDULED_TASK_RETRY_DELAY.as_secs()
-                } else {
-                    job.interval_seconds
-                }
-            });
+            .map(|schedule| schedule.interval_seconds)
+            .unwrap_or(job.interval_seconds);
         let next_run_at = Utc::now()
             + chrono::Duration::seconds(
                 i64::try_from(interval_seconds)
@@ -354,11 +292,9 @@ impl ScheduledPromptRuntime {
 }
 
 fn build_scheduled_user_turn(snapshot: &ThreadConfigSnapshot, job: &ScheduledPrompt) -> Op {
-    let prompt = match job.kind {
-        codex_state::ScheduledPromptKind::Loop => format!(
-            "You are resuming a scheduled long-running loop.\n\n\
+    let prompt = format!(
+        "You are resuming a scheduled long-running task.\n\n\
 Schedule id: {schedule_id}\n\
-Schedule kind: loop\n\
 Current repeat interval: {interval_seconds} seconds\n\
 Completed wakeups so far: {run_count}\n\n\
 Current objective/state:\n\
@@ -371,12 +307,7 @@ Allowed choices:\n\
    - Pass this exact schedule_id\n\
    - Set next_delay_seconds to the next wakeup delay\n\
    - Optionally set next_prompt to an updated compact objective/state for the next wakeup\n\
-2. Pause monitoring until a later wakeup:\n\
-   - Call `loop` with action=`pause`\n\
-   - Pass this exact schedule_id\n\
-   - Set either resume_delay_seconds or resume_at\n\
-   - Optionally set next_prompt to update the stored objective/state\n\
-3. Stop monitoring:\n\
+2. Stop monitoring:\n\
    - Call `loop` with action=`stop`\n\
    - Pass this exact schedule_id\n\n\
 Important rules:\n\
@@ -384,54 +315,17 @@ Important rules:\n\
 - Call `loop` before any final free-form conclusion.\n\
 - Do not use shell loops, sleep loops, cron, or external timers.\n\
 - Prefer bounded observations each wakeup.\n\
-- If you continue or pause, keep next_prompt short and operational.\n\
+- If you continue, keep next_prompt short and operational.\n\
 - After the `loop` call, end with a concise final answer wrapped in <task_complete>...</task_complete>.\n\
-- Avoid extra commentary before the `loop` call unless it is necessary to justify continue vs pause vs stop.\n\n\
+- Avoid extra commentary before the `loop` call unless it is necessary to justify continue vs stop.\n\n\
 Examples:\n\
 - Continue: {{\"action\":\"continue\",\"schedule_id\":\"{schedule_id}\",\"next_delay_seconds\":30,\"next_prompt\":\"Check the latest 200 log lines; stop if no errors for 3 checks.\"}}\n\
-- Pause: {{\"action\":\"pause\",\"schedule_id\":\"{schedule_id}\",\"resume_delay_seconds\":1800,\"next_prompt\":\"Deploy is in progress; resume after 30 minutes and verify error rate.\"}}\n\
 - Stop: {{\"action\":\"stop\",\"schedule_id\":\"{schedule_id}\"}}\n",
-            schedule_id = job.id,
-            interval_seconds = job.interval_seconds,
-            run_count = job.run_count,
-            objective = job.prompt
-        ),
-        codex_state::ScheduledPromptKind::Task => format!(
-            "You are resuming a scheduled future task.\n\n\
-Schedule id: {schedule_id}\n\
-Schedule kind: task\n\
-Completed wakeups so far: {run_count}\n\n\
-Task objective:\n\
-{objective}\n\n\
-Handle the task now.\n\
-If the task is fully done after this wakeup, you may finish normally without calling the `loop` tool.\n\
-If you need autonomous follow-up monitoring or a deferred retry, you may call the `loop` tool at most once.\n\n\
-Optional `loop` choices:\n\
-1. Continue monitoring:\n\
-   - Call `loop` with action=`continue`\n\
-   - Pass this exact schedule_id\n\
-   - Set next_delay_seconds to the next wakeup delay\n\
-   - Optionally set next_prompt to an updated compact objective/state\n\
-   - This converts the task into a recurring loop\n\
-2. Pause until a later wakeup:\n\
-   - Call `loop` with action=`pause`\n\
-   - Pass this exact schedule_id\n\
-   - Set either resume_delay_seconds or resume_at\n\
-   - Optionally set next_prompt\n\
-3. Stop explicitly:\n\
-   - Call `loop` with action=`stop`\n\
-   - Pass this exact schedule_id\n\n\
-Important rules:\n\
-- If no `loop` call is needed, just do the task and finish with <task_complete>...</task_complete>.\n\
-- If you do call `loop`, call it at most once and before any final free-form conclusion.\n\
-- Use `continue` only when you really need a recurring follow-up loop.\n\
-- Use `pause` when the task should remain scheduled but sleep until a later time.\n\
-- Avoid shell loops, sleep loops, cron, or external timers.\n",
-            schedule_id = job.id,
-            run_count = job.run_count,
-            objective = job.prompt
-        ),
-    };
+        schedule_id = job.id,
+        interval_seconds = job.interval_seconds,
+        run_count = job.run_count,
+        objective = job.prompt
+    );
     Op::UserTurn {
         items: vec![UserInput::Text {
             text: prompt,
@@ -477,25 +371,7 @@ mod tests {
             session_source: SessionSource::Cli,
         };
 
-        let job = ScheduledPrompt {
-            id: "sched-1".to_string(),
-            thread_id: ThreadId::new(),
-            rollout_path: PathBuf::from("/tmp/project/rollout.jsonl"),
-            kind: ScheduledPromptKind::Task,
-            prompt: "check ci".to_string(),
-            interval_seconds: 0,
-            next_run_at: Utc::now(),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-            paused_until: None,
-            completed_at: None,
-            last_run_started_at: None,
-            last_run_completed_at: None,
-            last_error: None,
-            run_count: 0,
-            status: ScheduledPromptStatus::Active,
-        };
-        let op = build_scheduled_user_turn(&snapshot, &job);
+        let op = build_scheduled_user_turn(&snapshot, "check ci".to_string());
         let Op::UserTurn {
             items,
             cwd,
@@ -511,17 +387,13 @@ mod tests {
             panic!("expected user turn op");
         };
 
-        assert_eq!(items.len(), 1);
-        let UserInput::Text {
-            text,
-            text_elements,
-        } = &items[0]
-        else {
-            panic!("expected text input");
-        };
-        assert!(text.contains("Schedule id: sched-1"));
-        assert!(text.contains("Task objective:\ncheck ci"));
-        assert!(text_elements.is_empty());
+        assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "check ci".to_string(),
+                text_elements: Vec::new(),
+            }]
+        );
         assert_eq!(cwd, PathBuf::from("/tmp/project"));
         assert_eq!(approval_policy, AskForApproval::Never);
         assert_eq!(sandbox_policy, SandboxPolicy::new_read_only_policy());

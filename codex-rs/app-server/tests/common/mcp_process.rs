@@ -37,9 +37,6 @@ use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewStartParams;
-use codex_app_server_protocol::ScheduleCancelParams;
-use codex_app_server_protocol::ScheduleCreateParams;
-use codex_app_server_protocol::ScheduleListParams;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::ThreadArchiveParams;
@@ -458,33 +455,6 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("mock/experimentalMethod", params).await
-    }
-
-    /// Send a `schedule/create` JSON-RPC request.
-    pub async fn send_schedule_create_request(
-        &mut self,
-        params: ScheduleCreateParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("schedule/create", params).await
-    }
-
-    /// Send a `schedule/list` JSON-RPC request.
-    pub async fn send_schedule_list_request(
-        &mut self,
-        params: ScheduleListParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("schedule/list", params).await
-    }
-
-    /// Send a `schedule/cancel` JSON-RPC request.
-    pub async fn send_schedule_cancel_request(
-        &mut self,
-        params: ScheduleCancelParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("schedule/cancel", params).await
     }
 
     /// Send a `turn/start` JSON-RPC request (v2).
