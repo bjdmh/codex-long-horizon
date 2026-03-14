@@ -137,11 +137,6 @@ pub(crate) enum AppEvent {
         is_final: bool,
     },
 
-    /// Fetch and append a lightweight scheduled loop summary for the active thread.
-    ShowLoopStatusSummary {
-        thread_id: ThreadId,
-    },
-
     /// Create a recurring scheduled prompt for the active thread.
     CreateLoopSchedule {
         every: Duration,
