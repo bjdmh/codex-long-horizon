@@ -234,17 +234,6 @@ impl ScheduledPromptRuntime {
                 Some("scheduled run ended without a final status".to_string())
             }
         };
-        let schedule_after = self.state_db.get_scheduled_prompt(job.id.as_str()).await?;
-        let made_loop_decision = schedule_after
-            .as_ref()
-            .is_some_and(|schedule| schedule.updated_at > job.updated_at);
-        let error_message = if error_message.is_none() && !made_loop_decision {
-            let message = "scheduled run completed without calling the loop tool".to_string();
-            let _ = self.state_db.cancel_scheduled_prompt(job.id.as_str()).await;
-            Some(message)
-        } else {
-            error_message
-        };
         self.finish_job_with_error(&job, error_message).await?;
 
         if !was_loaded {
@@ -312,12 +301,10 @@ Allowed choices:\n\
    - Pass this exact schedule_id\n\n\
 Important rules:\n\
 - Call `loop` exactly once per wakeup.\n\
-- Call `loop` before any final free-form conclusion.\n\
 - Do not use shell loops, sleep loops, cron, or external timers.\n\
 - Prefer bounded observations each wakeup.\n\
 - If you continue, keep next_prompt short and operational.\n\
-- After the `loop` call, end with a concise final answer wrapped in <task_complete>...</task_complete>.\n\
-- Avoid extra commentary before the `loop` call unless it is necessary to justify continue vs stop.\n\n\
+- After the `loop` call, end with a concise final answer wrapped in <task_complete>...</task_complete>.\n\n\
 Examples:\n\
 - Continue: {{\"action\":\"continue\",\"schedule_id\":\"{schedule_id}\",\"next_delay_seconds\":30,\"next_prompt\":\"Check the latest 200 log lines; stop if no errors for 3 checks.\"}}\n\
 - Stop: {{\"action\":\"stop\",\"schedule_id\":\"{schedule_id}\"}}\n",
