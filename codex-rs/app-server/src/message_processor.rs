@@ -162,7 +162,7 @@ pub(crate) struct MessageProcessorArgs {
 impl MessageProcessor {
     /// Create a new `MessageProcessor`, retaining a handle to the outgoing
     /// `Sender` so handlers can enqueue messages to be written to stdout.
-    pub(crate) async fn new(args: MessageProcessorArgs) -> Self {
+    pub(crate) fn new(args: MessageProcessorArgs) -> Self {
         let MessageProcessorArgs {
             outgoing,
             arg0_paths,

@@ -135,9 +135,6 @@ Example with notification opt-out:
 - `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
-- `schedule/create` — create a recurring scheduled prompt for a stored thread.
-- `schedule/list` — list recurring scheduled prompts, optionally filtered by `threadId`.
-- `schedule/cancel` — cancel a recurring scheduled prompt by id.
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. If `collaborationMode` is omitted, Codex uses the thread's current collaboration mode, which defaults to `execute` for new sessions unless configured otherwise. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
 - `turn/steer` — add user input to an already in-flight turn without starting a new turn; returns the active `turnId` that accepted the input.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
@@ -170,32 +167,6 @@ Example with notification opt-out:
 - `config/value/write` — write a single config key/value to the user's config.toml on disk.
 - `config/batchWrite` — apply multiple config edits atomically to the user's config.toml on disk.
 - `configRequirements/read` — fetch loaded requirements constraints from `requirements.toml` and/or MDM (or `null` if none are configured), including allow-lists (`allowedApprovalPolicies`, `allowedSandboxModes`, `allowedWebSearchModes`), pinned feature values (`featureRequirements`), `enforceResidency`, and `network` constraints.
-
-### Example: Create a recurring scheduled prompt
-
-```json
-{ "method": "schedule/create", "id": 40, "params": {
-    "threadId": "thr_123",
-    "prompt": "Check CI failures and fix safe issues",
-    "intervalSeconds": 600
-} }
-{ "id": 40, "result": {
-    "schedule": {
-        "id": "sched_123",
-        "threadId": "thr_123",
-        "status": "active",
-        "intervalSeconds": 600,
-        "prompt": "Check CI failures and fix safe issues",
-        "nextRunAt": 1730910600,
-        "createdAt": 1730910000,
-        "updatedAt": 1730910000,
-        "lastRunStartedAt": null,
-        "lastRunCompletedAt": null,
-        "lastError": null,
-        "runCount": 0
-    }
-} }
-```
 
 ### Example: Start or resume a thread
 

@@ -16,9 +16,6 @@ pub use model::LogQuery;
 pub use model::LogRow;
 pub use model::Phase2InputSelection;
 pub use model::Phase2JobClaimOutcome;
-pub use model::ScheduledPrompt;
-pub use model::ScheduledPromptCreateParams;
-pub use model::ScheduledPromptStatus;
 /// Preferred entrypoint: owns configuration and metrics.
 pub use runtime::StateRuntime;
 
@@ -54,7 +51,7 @@ pub use runtime::state_db_path;
 pub const SQLITE_HOME_ENV: &str = "CODEX_SQLITE_HOME";
 
 pub const STATE_DB_FILENAME: &str = "state";
-pub const STATE_DB_VERSION: u32 = 6;
+pub const STATE_DB_VERSION: u32 = 5;
 
 const METRIC_DB_INIT: &str = "codex.db.init";
 /// Errors encountered during DB operations. Tags: [stage]

@@ -13,11 +13,6 @@ pub mod exec_events;
 pub use cli::Cli;
 pub use cli::Command;
 pub use cli::ReviewArgs;
-pub use cli::ScheduleArgs;
-pub use cli::ScheduleCancelArgs;
-pub use cli::ScheduleCommand;
-pub use cli::ScheduleCreateArgs;
-pub use cli::ScheduleListArgs;
 use codex_arg0::Arg0DispatchPaths;
 use codex_cloud_requirements::cloud_requirements_loader;
 use codex_core::AuthManager;
@@ -39,11 +34,8 @@ use codex_core::format_exec_policy_error_with_source;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::manager::RefreshStrategy;
-use codex_core::scheduled_prompts::ScheduledPrompt;
-use codex_core::scheduled_prompts::ScheduledPromptRuntime;
 use codex_otel::set_parent_from_context;
 use codex_otel::traceparent_context_from_env;
-use codex_protocol::ThreadId;
 use codex_protocol::approvals::ElicitationAction;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::protocol::AskForApproval;
@@ -86,7 +78,6 @@ use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::find_thread_path_by_name_str;
-use codex_core::read_session_meta_line;
 
 const DEFAULT_ANALYTICS_ENABLED: bool = true;
 
@@ -494,16 +485,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
         },
     ));
-    if let Some(ExecCommand::Schedule(schedule_args)) = command.as_ref() {
-        return handle_schedule_command(
-            schedule_args,
-            &config,
-            json_mode,
-            Arc::clone(&thread_manager),
-            auth_manager,
-        )
-        .await;
-    }
     let default_model = thread_manager
         .get_models_manager()
         .get_default_model(&config.model, RefreshStrategy::OnlineIfUncached)
@@ -535,11 +516,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             let review_request = build_review_request(review_cli)?;
             let summary = codex_core::review_prompts::user_facing_hint(&review_request.target);
             (InitialOperation::Review { review_request }, summary)
-        }
-        (Some(ExecCommand::Schedule(_)), _, _) => {
-            return Err(anyhow::anyhow!(
-                "schedule commands should return before starting an exec session"
-            ));
         }
         (Some(ExecCommand::Resume(args)), root_prompt, imgs) => {
             let prompt_arg = args
@@ -888,178 +864,6 @@ fn load_output_schema(path: Option<PathBuf>) -> Option<Value> {
             std::process::exit(1);
         }
     }
-}
-
-async fn handle_schedule_command(
-    args: &ScheduleArgs,
-    config: &Config,
-    json_mode: bool,
-    thread_manager: Arc<ThreadManager>,
-    auth_manager: Arc<AuthManager>,
-) -> anyhow::Result<()> {
-    let scheduler = ScheduledPromptRuntime::new(
-        config.sqlite_home.clone(),
-        config.model_provider_id.clone(),
-        thread_manager,
-        auth_manager,
-        config.clone(),
-    )
-    .await?;
-
-    match &args.command {
-        ScheduleCommand::Create(create) => {
-            let (thread_id, rollout_path) = resolve_schedule_target(config, create).await?;
-            let every = parse_schedule_interval(create.every.as_str())?;
-            let created = scheduler
-                .create_for_rollout(thread_id, rollout_path, every, create.prompt.clone())
-                .await?;
-            write_schedule_output(json_mode, &[created])?;
-        }
-        ScheduleCommand::List(list) => {
-            let thread_id = match list.session_id.as_deref() {
-                Some(session_id) => Some(resolve_thread_id_filter(config, session_id).await?),
-                None => None,
-            };
-            let schedules = scheduler.list(thread_id.as_ref()).await?;
-            write_schedule_output(json_mode, &schedules)?;
-        }
-        ScheduleCommand::Cancel(cancel) => {
-            let cancelled = scheduler.cancel(cancel.schedule_id.as_str()).await?;
-            if json_mode {
-                write_stdout_line(
-                    serde_json::to_string(&serde_json::json!({ "cancelled": cancelled }))?.as_str(),
-                )?;
-            } else if cancelled {
-                write_stdout_line("Cancelled scheduled prompt.")?;
-            } else {
-                write_stdout_line("Scheduled prompt was already cancelled or missing.")?;
-            }
-        }
-        ScheduleCommand::Serve => {
-            scheduler.start();
-            eprintln!("Scheduled prompt worker is running. Press Ctrl+C to stop.");
-            tokio::signal::ctrl_c().await?;
-        }
-    }
-
-    Ok(())
-}
-
-async fn resolve_schedule_target(
-    config: &Config,
-    args: &ScheduleCreateArgs,
-) -> anyhow::Result<(ThreadId, PathBuf)> {
-    let resume_args = crate::cli::ResumeArgs {
-        session_id: args.session_id.clone(),
-        last: args.last,
-        all: args.all,
-        images: Vec::new(),
-        prompt: None,
-    };
-    let path = resolve_resume_path(config, &resume_args)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("no saved session matched the requested target"))?;
-    let meta = read_session_meta_line(&path).await?;
-    Ok((meta.meta.id, path))
-}
-
-async fn resolve_thread_id_filter(config: &Config, value: &str) -> anyhow::Result<ThreadId> {
-    if let Ok(thread_id) = ThreadId::from_string(value) {
-        return Ok(thread_id);
-    }
-    let path = find_thread_path_by_name_str(&config.codex_home, value)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("saved session not found: {value}"))?;
-    let meta = read_session_meta_line(&path).await?;
-    Ok(meta.meta.id)
-}
-
-fn parse_schedule_interval(value: &str) -> anyhow::Result<std::time::Duration> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(anyhow::anyhow!("interval must not be empty"));
-    }
-    let split_at = trimmed
-        .find(|ch: char| !ch.is_ascii_digit())
-        .unwrap_or(trimmed.len());
-    let (number, suffix) = trimmed.split_at(split_at);
-    if number.is_empty() {
-        return Err(anyhow::anyhow!(
-            "interval must start with a positive integer"
-        ));
-    }
-    let quantity: u64 = number.parse()?;
-    let seconds = match suffix {
-        "" | "s" => quantity,
-        "m" => quantity.saturating_mul(60),
-        "h" => quantity.saturating_mul(60 * 60),
-        "d" => quantity.saturating_mul(60 * 60 * 24),
-        _ => {
-            return Err(anyhow::anyhow!(
-                "unsupported interval suffix `{suffix}`; use s, m, h, or d"
-            ));
-        }
-    };
-    if seconds == 0 {
-        return Err(anyhow::anyhow!("interval must be greater than zero"));
-    }
-    Ok(std::time::Duration::from_secs(seconds))
-}
-
-fn write_schedule_output(json_mode: bool, schedules: &[ScheduledPrompt]) -> anyhow::Result<()> {
-    if json_mode {
-        let value = schedules
-            .iter()
-            .map(schedule_to_json)
-            .collect::<Vec<serde_json::Value>>();
-        write_stdout_line(serde_json::to_string(&value)?.as_str())?;
-        return Ok(());
-    }
-    if schedules.is_empty() {
-        write_stdout_line("No scheduled prompts.")?;
-        return Ok(());
-    }
-    for schedule in schedules {
-        write_stdout_line(
-            format!(
-                "{} [{}] every {}s next={} runs={} thread={}",
-                schedule.id,
-                schedule.status.as_str(),
-                schedule.interval_seconds,
-                schedule.next_run_at.to_rfc3339(),
-                schedule.run_count,
-                schedule.thread_id
-            )
-            .as_str(),
-        )?;
-    }
-    Ok(())
-}
-
-fn schedule_to_json(schedule: &ScheduledPrompt) -> serde_json::Value {
-    serde_json::json!({
-        "id": schedule.id,
-        "status": schedule.status.as_str(),
-        "thread_id": schedule.thread_id.to_string(),
-        "prompt": schedule.prompt,
-        "interval_seconds": schedule.interval_seconds,
-        "next_run_at": schedule.next_run_at.timestamp(),
-        "created_at": schedule.created_at.timestamp(),
-        "updated_at": schedule.updated_at.timestamp(),
-        "last_run_started_at": schedule.last_run_started_at.map(|value| value.timestamp()),
-        "last_run_completed_at": schedule.last_run_completed_at.map(|value| value.timestamp()),
-        "last_error": schedule.last_error,
-        "run_count": schedule.run_count,
-    })
-}
-
-fn write_stdout_line(line: &str) -> anyhow::Result<()> {
-    use std::io::Write;
-
-    let mut stdout = std::io::stdout();
-    writeln!(stdout, "{line}")?;
-    stdout.flush()?;
-    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

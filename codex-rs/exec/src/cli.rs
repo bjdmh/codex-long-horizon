@@ -121,9 +121,6 @@ pub enum Command {
 
     /// Run a code review against the current repository.
     Review(ReviewArgs),
-
-    /// Manage recurring scheduled prompts.
-    Schedule(ScheduleArgs),
 }
 
 #[derive(Args, Debug)]
@@ -259,97 +256,6 @@ pub enum Color {
     Never,
     #[default]
     Auto,
-}
-
-#[derive(Parser, Debug)]
-pub struct ScheduleArgs {
-    #[command(subcommand)]
-    pub command: ScheduleCommand,
-}
-
-#[derive(Debug, clap::Subcommand)]
-pub enum ScheduleCommand {
-    /// Create a recurring scheduled prompt for a saved session.
-    Create(ScheduleCreateArgs),
-    /// List scheduled prompts.
-    List(ScheduleListArgs),
-    /// Cancel a scheduled prompt.
-    Cancel(ScheduleCancelArgs),
-    /// Run the scheduled prompt worker in the foreground.
-    Serve,
-}
-
-#[derive(Args, Debug)]
-pub struct ScheduleCreateArgs {
-    /// Conversation/session id (UUID) or thread name. UUIDs take precedence if it parses.
-    /// If omitted, use --last to pick the most recent recorded session.
-    #[arg(long = "session-id", value_name = "SESSION_ID")]
-    pub session_id: Option<String>,
-
-    /// Use the most recent recorded session (newest) without specifying an id.
-    #[arg(long = "last", default_value_t = false, conflicts_with = "session_id")]
-    pub last: bool,
-
-    /// Show all sessions when resolving --last (disables cwd filtering).
-    #[arg(long = "all", default_value_t = false)]
-    pub all: bool,
-
-    /// Interval between runs. Supports suffixes s, m, h, d (for example 30s, 10m, 2h).
-    #[arg(long = "every", value_name = "INTERVAL")]
-    pub every: String,
-
-    /// Prompt to submit each time the schedule fires.
-    #[arg(value_name = "PROMPT")]
-    pub prompt: String,
-}
-
-#[derive(Args, Debug)]
-pub struct ScheduleListArgs {
-    /// Conversation/session id (UUID) to filter by.
-    #[arg(long = "session-id", value_name = "SESSION_ID")]
-    pub session_id: Option<String>,
-}
-
-#[derive(Args, Debug)]
-pub struct ScheduleCancelArgs {
-    /// Scheduled prompt id.
-    #[arg(value_name = "SCHEDULE_ID")]
-    pub schedule_id: String,
-}
-
-#[cfg(test)]
-mod schedule_tests {
-    use super::*;
-
-    #[test]
-    fn parses_schedule_create_command() {
-        let cli = Cli::try_parse_from([
-            "codex", "schedule", "create", "--last", "--every", "10m", "check ci",
-        ])
-        .expect("parse schedule create");
-        let Some(Command::Schedule(schedule)) = cli.command else {
-            panic!("expected schedule command");
-        };
-        let ScheduleCommand::Create(args) = schedule.command else {
-            panic!("expected schedule create");
-        };
-        assert!(args.last);
-        assert_eq!(args.every, "10m");
-        assert_eq!(args.prompt, "check ci");
-    }
-
-    #[test]
-    fn parses_schedule_cancel_command() {
-        let cli = Cli::try_parse_from(["codex", "schedule", "cancel", "job-123"])
-            .expect("parse schedule cancel");
-        let Some(Command::Schedule(schedule)) = cli.command else {
-            panic!("expected schedule command");
-        };
-        let ScheduleCommand::Cancel(args) = schedule.command else {
-            panic!("expected schedule cancel");
-        };
-        assert_eq!(args.schedule_id, "job-123");
-    }
 }
 
 #[cfg(test)]
