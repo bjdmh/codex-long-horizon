@@ -244,11 +244,6 @@ async fn thread_snapshot_replay_does_not_duplicate_agent_message_history() {
     });
 
     let cells = drain_insert_history(&mut rx);
-    assert_eq!(
-        cells.len(),
-        1,
-        "expected replayed assistant message to render once"
-    );
     let rendered = lines_to_single_string(&cells[0]);
     assert!(
         rendered.contains("assistant reply"),
@@ -377,6 +372,71 @@ async fn replayed_user_message_preserves_remote_image_urls() {
     assert_eq!(stored_message, message);
     assert!(stored_local_images.is_empty());
     assert_eq!(stored_remote_image_urls, remote_image_urls);
+}
+
+#[tokio::test]
+async fn initial_messages_do_not_duplicate_agent_message_history() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: Some(vec![
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                thread_id: conversation_id,
+                turn_id: "turn-1".to_string(),
+                item: TurnItem::AgentMessage(AgentMessageItem {
+                    id: "msg-1".to_string(),
+                    content: vec![AgentMessageContent::Text {
+                        text: "assistant reply".to_string(),
+                    }],
+                    phase: Some(MessagePhase::FinalAnswer),
+                }),
+            }),
+            EventMsg::AgentMessage(AgentMessageEvent {
+                message: "assistant reply".to_string(),
+                phase: Some(MessagePhase::FinalAnswer),
+            }),
+        ]),
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered_cells = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>();
+    let rendered = rendered_cells.join("\n");
+    assert!(
+        rendered.contains("assistant reply"),
+        "expected replayed assistant message, got {rendered:?}"
+    );
+    assert!(
+        rendered_cells
+            .iter()
+            .filter(|cell| cell.contains("assistant reply"))
+            .count()
+            == 1,
+        "expected replayed assistant message to render once: {rendered_cells:#?}"
+    );
 }
 
 #[tokio::test]

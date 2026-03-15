@@ -88,6 +88,7 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
@@ -113,6 +114,7 @@ use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ImageGenerationBeginEvent;
 use codex_protocol::protocol::ImageGenerationEndEvent;
+use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ListCustomPromptsResponseEvent;
 use codex_protocol::protocol::ListSkillsResponseEvent;
 use codex_protocol::protocol::McpListToolsResponseEvent;
@@ -4609,12 +4611,51 @@ impl ChatWidget {
     /// avoid triggering side effects. Event ids are passed as `None` to
     /// distinguish replayed events from live ones.
     fn replay_initial_messages(&mut self, events: Vec<EventMsg>) {
+        let mut replayed_agent_message_items =
+            HashMap::<(String, Option<&'static str>), usize>::new();
         for msg in events {
             if matches!(
                 msg,
                 EventMsg::SessionConfigured(_) | EventMsg::ThreadNameUpdated(_)
             ) {
                 continue;
+            }
+            match &msg {
+                EventMsg::ItemCompleted(ItemCompletedEvent {
+                    item: TurnItem::AgentMessage(item),
+                    ..
+                }) => {
+                    let mut message = String::new();
+                    for content in &item.content {
+                        match content {
+                            AgentMessageContent::Text { text } => message.push_str(text),
+                        }
+                    }
+                    let phase = item.phase.clone().map(|phase| match phase {
+                        MessagePhase::Commentary => "commentary",
+                        MessagePhase::FinalAnswer => "final_answer",
+                    });
+                    *replayed_agent_message_items
+                        .entry((message, phase))
+                        .or_default() += 1;
+                }
+                EventMsg::AgentMessage(AgentMessageEvent { message, phase })
+                    if replayed_agent_message_items
+                        .get_mut(&(
+                            message.clone(),
+                            phase.clone().map(|phase| match phase {
+                                MessagePhase::Commentary => "commentary",
+                                MessagePhase::FinalAnswer => "final_answer",
+                            }),
+                        ))
+                        .is_some_and(|count| {
+                            *count -= 1;
+                            true
+                        }) =>
+                {
+                    continue;
+                }
+                _ => {}
             }
             // `id: None` indicates a synthetic/fake id coming from replay.
             self.dispatch_event_msg(None, msg, Some(ReplayKind::ResumeInitialMessages));
