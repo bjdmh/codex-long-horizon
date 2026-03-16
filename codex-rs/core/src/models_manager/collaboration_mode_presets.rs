@@ -8,6 +8,8 @@ const COLLABORATION_MODE_DEFAULT: &str =
     include_str!("../../templates/collaboration_mode/default.md");
 const COLLABORATION_MODE_EXECUTE: &str =
     include_str!("../../templates/collaboration_mode/execute.md");
+const COLLABORATION_MODE_NON_STOP: &str =
+    include_str!("../../templates/collaboration_mode/non_stop.md");
 const KNOWN_MODE_NAMES_PLACEHOLDER: &str = "{{KNOWN_MODE_NAMES}}";
 const REQUEST_USER_INPUT_AVAILABILITY_PLACEHOLDER: &str = "{{REQUEST_USER_INPUT_AVAILABILITY}}";
 const ASKING_QUESTIONS_GUIDANCE_PLACEHOLDER: &str = "{{ASKING_QUESTIONS_GUIDANCE}}";
@@ -29,6 +31,7 @@ pub(crate) fn builtin_collaboration_mode_presets(
     vec![
         default_preset(collaboration_modes_config),
         execute_preset(),
+        non_stop_preset(),
         plan_preset(),
     ]
 }
@@ -60,6 +63,16 @@ fn execute_preset() -> CollaborationModeMask {
         model: None,
         reasoning_effort: None,
         developer_instructions: Some(Some(COLLABORATION_MODE_EXECUTE.to_string())),
+    }
+}
+
+fn non_stop_preset() -> CollaborationModeMask {
+    CollaborationModeMask {
+        name: ModeKind::NonStop.display_name().to_string(),
+        mode: Some(ModeKind::NonStop),
+        model: None,
+        reasoning_effort: None,
+        developer_instructions: Some(Some(COLLABORATION_MODE_NON_STOP.to_string())),
     }
 }
 
@@ -133,11 +146,13 @@ mod tests {
             ModeKind::Default.display_name()
         );
         assert_eq!(execute_preset().name, ModeKind::Execute.display_name());
+        assert_eq!(non_stop_preset().name, ModeKind::NonStop.display_name());
         assert_eq!(
             plan_preset().reasoning_effort,
             Some(Some(ReasoningEffort::Medium))
         );
         assert_eq!(execute_preset().reasoning_effort, None);
+        assert_eq!(non_stop_preset().reasoning_effort, None);
     }
 
     #[test]
@@ -152,6 +167,22 @@ mod tests {
         };
 
         let updated = mode.apply_mask(&execute_preset());
+
+        assert_eq!(updated.reasoning_effort(), Some(ReasoningEffort::Low));
+    }
+
+    #[test]
+    fn non_stop_preset_preserves_existing_reasoning_effort() {
+        let mode = CollaborationMode {
+            mode: ModeKind::NonStop,
+            settings: Settings {
+                model: "gpt-5.4".to_string(),
+                reasoning_effort: Some(ReasoningEffort::Low),
+                developer_instructions: None,
+            },
+        };
+
+        let updated = mode.apply_mask(&non_stop_preset());
 
         assert_eq!(updated.reasoning_effort(), Some(ReasoningEffort::Low));
     }

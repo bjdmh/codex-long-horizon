@@ -190,10 +190,15 @@ pub enum ModeKind {
     #[ts(skip)]
     PairProgramming,
     Execute,
+    NonStop,
 }
 
-pub const TUI_VISIBLE_COLLABORATION_MODES: [ModeKind; 3] =
-    [ModeKind::Default, ModeKind::Execute, ModeKind::Plan];
+pub const TUI_VISIBLE_COLLABORATION_MODES: [ModeKind; 4] = [
+    ModeKind::Default,
+    ModeKind::Execute,
+    ModeKind::NonStop,
+    ModeKind::Plan,
+];
 
 impl ModeKind {
     pub const fn display_name(self) -> &'static str {
@@ -202,11 +207,16 @@ impl ModeKind {
             Self::Default => "Default",
             Self::PairProgramming => "Pair Programming",
             Self::Execute => "Execute",
+            Self::NonStop => "Non-stop",
         }
     }
 
     pub const fn is_tui_visible(self) -> bool {
-        matches!(self, Self::Plan | Self::Default | Self::Execute)
+        matches!(self, Self::Plan | Self::Default | Self::Execute | Self::NonStop)
+    }
+
+    pub const fn is_autonomous(self) -> bool {
+        matches!(self, Self::Execute | Self::NonStop)
     }
 
     pub const fn allows_request_user_input(self) -> bool {
@@ -354,8 +364,21 @@ mod tests {
     }
 
     #[test]
+    fn mode_kind_deserializes_non_stop_to_non_stop() {
+        let mode: ModeKind =
+            serde_json::from_str("\"non_stop\"").expect("deserialize non-stop mode");
+
+        assert_eq!(ModeKind::NonStop, mode);
+    }
+
+    #[test]
     fn tui_visible_collaboration_modes_match_mode_kind_visibility() {
-        let expected = [ModeKind::Default, ModeKind::Execute, ModeKind::Plan];
+        let expected = [
+            ModeKind::Default,
+            ModeKind::Execute,
+            ModeKind::NonStop,
+            ModeKind::Plan,
+        ];
         assert_eq!(expected, TUI_VISIBLE_COLLABORATION_MODES);
 
         for mode in TUI_VISIBLE_COLLABORATION_MODES {

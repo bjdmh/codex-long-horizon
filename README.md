@@ -57,6 +57,7 @@ You can also use Codex with an API key, but this requires [additional setup](htt
 - [**Installing & building**](./docs/install.md)
 - [**Fast local builds**](./docs/install.md#fast-local-builds)
 - [**Long-horizon experiments**](./docs/long-horizon-experiments.md)
+- [**Non-stop mode design**](./docs/non-stop-mode.md)
 - [**Open source fund**](./docs/open-source-fund.md)
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).

@@ -52,13 +52,17 @@ config value for "follow the global default in Plan mode".
 ## Initial collaboration mode
 
 `initial_collaboration_mode` lets you choose the built-in collaboration preset
-used when a new session starts. Supported values are `default`, `execute`, and
-`plan`. When unset, Codex now starts new sessions in `execute` mode by default.
+used when a new session starts. Supported values are `default`, `execute`,
+`non_stop`, and `plan`. When unset, Codex now starts new sessions in `execute`
+mode by default.
 
 - `default`: the regular interactive coding mode
 - `execute`: a long-horizon mode that keeps pushing work forward and only ends a
   turn when the task is complete (`<task_complete>`) or genuinely blocked on
   user input (`<await_user_input>`)
+- `non_stop`: an autonomous mode that treats task completion as a subtask
+  boundary and keeps choosing the next concrete task until explicitly stopped or
+  blocked on required user input
 - `plan`: the planning-focused mode
 
 Ctrl+C/Ctrl+D quitting uses a ~1 second double-press hint (`ctrl + c again to quit`).
