@@ -17,6 +17,7 @@ const NON_STOP_CHECKPOINTS_DIR: &str = "non-stop-checkpoints";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NonStopCheckpointStatus {
+    Pending,
     Running,
     TurnComplete,
     TurnAborted,
@@ -27,13 +28,15 @@ pub enum NonStopCheckpointStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NonStopCheckpoint {
     pub thread_id: ThreadId,
-    pub turn_id: String,
+    pub turn_id: Option<String>,
     pub status: NonStopCheckpointStatus,
     pub collaboration_mode: ModeKind,
     pub model: String,
     pub cwd: PathBuf,
     pub session_source: SessionSource,
+    pub created_at: i64,
     pub updated_at: i64,
+    pub goal_prompt: Option<String>,
     pub last_agent_message: Option<String>,
 }
 
@@ -57,27 +60,88 @@ pub(crate) async fn maybe_persist_checkpoint(
         Some(fields) => fields,
         None => return,
     };
+    let existing = read_checkpoint(codex_home, thread_id).await;
+    let now = Utc::now().timestamp();
     let checkpoint = NonStopCheckpoint {
         thread_id,
-        turn_id: turn_context.sub_id.clone(),
+        turn_id: Some(turn_context.sub_id.clone()),
         status,
         collaboration_mode: turn_context.collaboration_mode.mode,
         model: turn_context.collaboration_mode.model().to_string(),
         cwd: turn_context.cwd.clone(),
         session_source: turn_context.session_source.clone(),
-        updated_at: Utc::now().timestamp(),
+        created_at: existing
+            .as_ref()
+            .map_or(now, |checkpoint| checkpoint.created_at),
+        updated_at: now,
+        goal_prompt: existing.and_then(|checkpoint| checkpoint.goal_prompt),
         last_agent_message,
     };
 
+    write_checkpoint(codex_home, thread_id, &checkpoint).await;
+}
+
+pub async fn register_non_stop_session(
+    codex_home: &Path,
+    thread_id: ThreadId,
+    model: &str,
+    cwd: &Path,
+    session_source: SessionSource,
+    goal_prompt: Option<String>,
+) {
+    let existing = read_checkpoint(codex_home, thread_id).await;
+    let now = Utc::now().timestamp();
+    let existing_turn_id = existing
+        .as_ref()
+        .and_then(|checkpoint| checkpoint.turn_id.clone());
+    let existing_status = existing
+        .as_ref()
+        .map_or(NonStopCheckpointStatus::Pending, |checkpoint| {
+            checkpoint.status
+        });
+    let existing_created_at = existing
+        .as_ref()
+        .map_or(now, |checkpoint| checkpoint.created_at);
+    let existing_goal_prompt = existing
+        .as_ref()
+        .and_then(|checkpoint| checkpoint.goal_prompt.clone());
+    let existing_last_agent_message = existing.and_then(|checkpoint| checkpoint.last_agent_message);
+    let checkpoint = NonStopCheckpoint {
+        thread_id,
+        turn_id: existing_turn_id,
+        status: existing_status,
+        collaboration_mode: ModeKind::NonStop,
+        model: model.to_string(),
+        cwd: cwd.to_path_buf(),
+        session_source,
+        created_at: existing_created_at,
+        updated_at: now,
+        goal_prompt: goal_prompt.or(existing_goal_prompt),
+        last_agent_message: existing_last_agent_message,
+    };
+
+    write_checkpoint(codex_home, thread_id, &checkpoint).await;
+}
+
+async fn read_checkpoint(codex_home: &Path, thread_id: ThreadId) -> Option<NonStopCheckpoint> {
+    let path = checkpoint_path(codex_home, thread_id);
+    let data = tokio::fs::read(&path).await.ok()?;
+    serde_json::from_slice(&data).ok()
+}
+
+async fn write_checkpoint(codex_home: &Path, thread_id: ThreadId, checkpoint: &NonStopCheckpoint) {
     let path = checkpoint_path(codex_home, thread_id);
     if let Some(parent) = path.parent()
         && let Err(err) = tokio::fs::create_dir_all(parent).await
     {
-        warn!("failed to create non-stop checkpoint dir {}: {err}", parent.display());
+        warn!(
+            "failed to create non-stop checkpoint dir {}: {err}",
+            parent.display()
+        );
         return;
     }
     let tmp_path = path.with_extension("json.tmp");
-    let payload = match serde_json::to_vec_pretty(&checkpoint) {
+    let payload = match serde_json::to_vec_pretty(checkpoint) {
         Ok(payload) => payload,
         Err(err) => {
             warn!("failed to serialize non-stop checkpoint for {thread_id}: {err}");
@@ -146,7 +210,10 @@ mod tests {
         });
         assert_eq!(
             checkpoint_fields_from_event(&complete),
-            Some((NonStopCheckpointStatus::TurnComplete, Some("done".to_string())))
+            Some((
+                NonStopCheckpointStatus::TurnComplete,
+                Some("done".to_string())
+            ))
         );
 
         let started = EventMsg::TurnStarted(TurnStartedEvent {
@@ -170,5 +237,30 @@ mod tests {
                 Some("Interrupted".to_string())
             ))
         );
+    }
+
+    #[tokio::test]
+    async fn register_non_stop_session_persists_goal_prompt() {
+        let dir = TempDir::new().expect("tempdir");
+        let thread_id = ThreadId::new();
+        register_non_stop_session(
+            dir.path(),
+            thread_id,
+            "gpt-5.4",
+            dir.path(),
+            SessionSource::Exec,
+            Some("ship the feature".to_string()),
+        )
+        .await;
+
+        let checkpoint: NonStopCheckpoint = serde_json::from_slice(
+            &tokio::fs::read(checkpoint_path(dir.path(), thread_id))
+                .await
+                .expect("read checkpoint"),
+        )
+        .expect("parse checkpoint");
+        assert_eq!(checkpoint.status, NonStopCheckpointStatus::Pending);
+        assert_eq!(checkpoint.goal_prompt.as_deref(), Some("ship the feature"));
+        assert_eq!(checkpoint.turn_id, None);
     }
 }

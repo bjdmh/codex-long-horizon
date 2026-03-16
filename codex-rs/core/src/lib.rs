@@ -82,6 +82,7 @@ pub use model_provider_info::create_oss_provider_with_base_url;
 pub use non_stop_checkpoint::NonStopCheckpoint;
 pub use non_stop_checkpoint::NonStopCheckpointStatus;
 pub use non_stop_checkpoint::checkpoint_path as non_stop_checkpoint_path;
+pub use non_stop_checkpoint::register_non_stop_session;
 mod event_mapping;
 pub mod review_format;
 pub mod review_prompts;

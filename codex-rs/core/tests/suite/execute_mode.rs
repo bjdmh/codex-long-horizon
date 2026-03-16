@@ -1,9 +1,9 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use anyhow::Result;
-use codex_core::non_stop_checkpoint_path;
 use codex_core::NonStopCheckpoint;
 use codex_core::NonStopCheckpointStatus;
+use codex_core::non_stop_checkpoint_path;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;

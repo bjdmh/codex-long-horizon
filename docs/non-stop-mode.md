@@ -53,6 +53,10 @@ The current groundwork now persists per-thread `Non-stop` checkpoints under:
 
 - `CODEX_HOME/non-stop-checkpoints/<thread_id>.json`
 
+When `codex exec --non-stop` starts a session, the checkpoint is also seeded
+with the current goal prompt so later supervisor work can resume from an
+explicit objective.
+
 ### Phase 3: constrained self-directed innovation
 
 Autonomous innovation should be explicit and bounded:

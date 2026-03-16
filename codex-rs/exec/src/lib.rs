@@ -34,6 +34,7 @@ use codex_core::format_exec_policy_error_with_source;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::manager::RefreshStrategy;
+use codex_core::register_non_stop_session;
 use codex_otel::set_parent_from_context;
 use codex_otel::traceparent_context_from_env;
 use codex_protocol::approvals::ElicitationAction;
@@ -596,6 +597,17 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     // Print the effective configuration and initial request so users can see what Codex
     // is using.
     event_processor.print_config_summary(&config, &prompt_summary, &session_configured);
+    if config.initial_collaboration_mode == ModeKind::NonStop {
+        register_non_stop_session(
+            config.codex_home.as_path(),
+            session_configured.session_id,
+            session_configured.model.as_str(),
+            session_configured.cwd.as_path(),
+            SessionSource::Exec,
+            Some(prompt_summary.clone()),
+        )
+        .await;
+    }
 
     info!("Codex initialized with event: {session_configured:?}");
 

@@ -1,6 +1,9 @@
 #![cfg(not(target_os = "windows"))]
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+use codex_core::NonStopCheckpoint;
+use codex_core::NonStopCheckpointStatus;
+use codex_core::non_stop_checkpoint_path;
 use codex_utils_cargo_bin::find_resource;
 use core_test_support::test_codex_exec::test_codex_exec;
 use walkdir::WalkDir;
@@ -107,6 +110,23 @@ fn non_stop_uses_non_stop_defaults_without_rewriting_codex_home() -> anyhow::Res
         rollout.contains("gpt-5.4"),
         "expected Non-stop default model in session rollout, got: {rollout}"
     );
+
+    let thread_id = extract_conversation_id(
+        &find_session_file_containing_marker(
+            &test.home_path().join("sessions"),
+            "non-stop behavior",
+        )
+        .expect("session file"),
+    );
+    let thread_id =
+        codex_protocol::ThreadId::from_string(&thread_id).expect("parse checkpoint thread id");
+    let checkpoint: NonStopCheckpoint = serde_json::from_str(
+        &std::fs::read_to_string(non_stop_checkpoint_path(test.home_path(), thread_id))
+            .expect("read checkpoint"),
+    )
+    .expect("parse checkpoint");
+    assert_eq!(checkpoint.status, NonStopCheckpointStatus::TurnComplete);
+    assert_eq!(checkpoint.goal_prompt.as_deref(), Some("non-stop behavior"));
 
     Ok(())
 }
