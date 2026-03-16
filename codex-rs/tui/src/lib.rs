@@ -228,6 +228,17 @@ pub use public_widgets::composer_input::ComposerInput;
 // (tests access modules directly within the crate)
 
 pub async fn run_main(mut cli: Cli, arg0_paths: Arg0DispatchPaths) -> std::io::Result<AppExitInfo> {
+    if cli.non_stop {
+        cli.config_overrides
+            .raw_overrides
+            .push("initial_collaboration_mode=\"non_stop\"".to_string());
+        if cli.model.is_none() {
+            cli.config_overrides
+                .raw_overrides
+                .push("model=\"gpt-5.4\"".to_string());
+        }
+    }
+
     let (sandbox_mode, approval_policy) = if cli.full_auto {
         (
             Some(SandboxMode::WorkspaceWrite),

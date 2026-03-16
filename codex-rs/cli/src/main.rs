@@ -1051,6 +1051,9 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
     if let Some(model) = subcommand_cli.model {
         interactive.model = Some(model);
     }
+    if subcommand_cli.non_stop {
+        interactive.non_stop = true;
+    }
     if subcommand_cli.oss {
         interactive.oss = true;
     }
@@ -1201,6 +1204,15 @@ mod tests {
         );
         assert_eq!(args.session_id.as_deref(), Some("session-123"));
         assert_eq!(args.prompt.as_deref(), Some("re-review"));
+    }
+
+    #[test]
+    fn root_cli_parses_non_stop_for_interactive_mode() {
+        let cli = MultitoolCli::try_parse_from(["codex", "--non-stop", "go"])
+            .expect("parse should succeed");
+
+        assert!(cli.interactive.non_stop);
+        assert_eq!(cli.interactive.prompt.as_deref(), Some("go"));
     }
 
     fn app_server_from_args(args: &[&str]) -> AppServerCommand {
@@ -1395,6 +1407,12 @@ mod tests {
         assert!(interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
+    }
+
+    #[test]
+    fn resume_merges_non_stop_flag() {
+        let interactive = finalize_resume_from_args(["codex", "resume", "--non-stop"].as_ref());
+        assert!(interactive.non_stop);
     }
 
     #[test]

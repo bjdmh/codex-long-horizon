@@ -67,6 +67,10 @@ pub struct Cli {
     #[arg(long = "profile", short = 'p')]
     pub config_profile: Option<String>,
 
+    /// Run this interactive session in Non-stop mode.
+    #[arg(long = "non-stop", default_value_t = false)]
+    pub non_stop: bool,
+
     /// Select the sandbox policy to use when executing model-generated shell
     /// commands.
     #[arg(long = "sandbox", short = 's')]

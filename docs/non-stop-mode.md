@@ -79,9 +79,10 @@ Autonomous innovation should be explicit and bounded:
 
 Use:
 
+- `codex --non-stop`
 - `codex exec --non-stop "your goal"`
 
-This flag keeps using the current `CODEX_HOME` and runs with:
+These entry points keep using the current `CODEX_HOME` and run with:
 
 - `initial_collaboration_mode = "non_stop"` for the current invocation
 - default model `gpt-5.4` unless you explicitly pass `--model`
