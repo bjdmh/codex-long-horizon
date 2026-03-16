@@ -30,6 +30,8 @@ const TASK_COMPLETE_OPEN_TAG: &str = "<task_complete>";
 const TASK_COMPLETE_CLOSE_TAG: &str = "</task_complete>";
 const AWAIT_USER_INPUT_OPEN_TAG: &str = "<await_user_input>";
 const AUTO_CONTINUE_PREFIX: &str = "Continue executing the current task autonomously.";
+const NON_STOP_AUTO_CONTINUE_PREFIX: &str = "Continue operating in Non-stop mode.";
+const NON_STOP_SUBTASK_PREFIX: &str = "The last subtask is complete.";
 const STALL_RECOVERY_PREFIX: &str = "Your last visible update repeated without concrete progress";
 
 fn execute_mode(model: String) -> CollaborationMode {
@@ -43,7 +45,22 @@ fn execute_mode(model: String) -> CollaborationMode {
     }
 }
 
-async fn submit_execute_turn(test: &TestCodex, prompt: &str) -> Result<TurnCompleteEvent> {
+fn non_stop_mode(model: String) -> CollaborationMode {
+    CollaborationMode {
+        mode: ModeKind::NonStop,
+        settings: Settings {
+            model,
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    }
+}
+
+async fn submit_turn(
+    test: &TestCodex,
+    prompt: &str,
+    collaboration_mode: CollaborationMode,
+) -> Result<TurnCompleteEvent> {
     let session_model = test.session_configured.model.clone();
 
     test.codex
@@ -60,7 +77,7 @@ async fn submit_execute_turn(test: &TestCodex, prompt: &str) -> Result<TurnCompl
             effort: None,
             summary: None,
             service_tier: None,
-            collaboration_mode: Some(execute_mode(session_model)),
+            collaboration_mode: Some(collaboration_mode),
             personality: None,
         })
         .await?;
@@ -78,6 +95,16 @@ async fn submit_execute_turn(test: &TestCodex, prompt: &str) -> Result<TurnCompl
     .await;
 
     Ok(completed)
+}
+
+async fn submit_execute_turn(test: &TestCodex, prompt: &str) -> Result<TurnCompleteEvent> {
+    let session_model = test.session_configured.model.clone();
+    submit_turn(test, prompt, execute_mode(session_model)).await
+}
+
+async fn submit_non_stop_turn(test: &TestCodex, prompt: &str) -> Result<TurnCompleteEvent> {
+    let session_model = test.session_configured.model.clone();
+    submit_turn(test, prompt, non_stop_mode(session_model)).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -265,6 +292,72 @@ async fn execute_mode_does_not_stop_on_unmarked_completion_claim() -> Result<()>
             .iter()
             .any(|text| text.contains(AUTO_CONTINUE_PREFIX)),
         "unmarked completion language should still trigger execute-mode continuation"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_stop_mode_continues_after_completed_subtask() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let test = test_codex().build(&server).await?;
+
+    let requests = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message(
+                    "msg-1",
+                    &format!(
+                        "{TASK_COMPLETE_OPEN_TAG}initial fix verified{TASK_COMPLETE_CLOSE_TAG}"
+                    ),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "Starting the next validation pass."),
+                ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_assistant_message(
+                    "msg-3",
+                    &format!(
+                        "{AWAIT_USER_INPUT_OPEN_TAG}I need production credentials.</await_user_input>"
+                    ),
+                ),
+                ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    let completed = submit_non_stop_turn(&test, "keep working until I explicitly stop you").await?;
+
+    assert_eq!(
+        completed.last_agent_message.as_deref(),
+        Some("I need production credentials.")
+    );
+
+    let all_requests = requests.requests();
+    assert_eq!(all_requests.len(), 3);
+    assert!(
+        all_requests[1]
+            .message_input_texts("developer")
+            .iter()
+            .any(|text| text.contains(NON_STOP_SUBTASK_PREFIX)),
+        "completed subtasks should trigger the non-stop subtask continuation prompt"
+    );
+    assert!(
+        all_requests[2]
+            .message_input_texts("developer")
+            .iter()
+            .any(|text| text.contains(NON_STOP_AUTO_CONTINUE_PREFIX)),
+        "follow-up status updates should keep non-stop mode moving"
     );
 
     Ok(())

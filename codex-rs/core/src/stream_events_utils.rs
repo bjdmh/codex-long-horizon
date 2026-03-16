@@ -44,11 +44,20 @@ pub(crate) fn execute_mode_auto_continue_message(attempt: usize) -> String {
     )
 }
 
-pub(crate) fn execute_mode_stall_recovery_message(
-    stall_count: usize,
-    repeated_status: Option<&str>,
-) -> String {
-    let repeated_status = repeated_status
+pub(crate) fn non_stop_mode_auto_continue_message(attempt: usize) -> String {
+    format!(
+        "Continue operating in Non-stop mode. This is non-stop auto-continuation #{attempt}. Do not stop for a status update, a completion guess, or an optional next step. Do not end the turn just because a subtask is complete. If you finish a subtask, immediately pick the next highest-leverage concrete task and keep going. Only end the turn if you are blocked on information only the user can provide and you include {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG}."
+    )
+}
+
+pub(crate) fn non_stop_mode_subtask_continue_message(attempt: usize) -> String {
+    format!(
+        "The last subtask is complete. This is non-stop subtask-continuation #{attempt}. Immediately choose and execute the next highest-leverage concrete task toward the user's goal. Do not stop just to report completion. Only end the turn if you are blocked on information only the user can provide and you include {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG}."
+    )
+}
+
+fn trimmed_repeated_status(repeated_status: Option<&str>) -> String {
+    repeated_status
         .map(str::trim)
         .filter(|text| !text.is_empty())
         .map(|text| {
@@ -59,9 +68,26 @@ pub(crate) fn execute_mode_stall_recovery_message(
                 format!("{truncated}...")
             }
         })
-        .unwrap_or_else(|| "(no visible assistant update)".to_string());
+        .unwrap_or_else(|| "(no visible assistant update)".to_string())
+}
+
+pub(crate) fn execute_mode_stall_recovery_message(
+    stall_count: usize,
+    repeated_status: Option<&str>,
+) -> String {
+    let repeated_status = trimmed_repeated_status(repeated_status);
     format!(
         "Your last visible update repeated without concrete progress {stall_count} time(s): \"{repeated_status}\". Take a concrete next action now instead of another status update. If the task is already complete, end with {TASK_COMPLETE_OPEN_TAG}...{TASK_COMPLETE_CLOSE_TAG}. If a required external dependency is missing, end with {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG}."
+    )
+}
+
+pub(crate) fn non_stop_mode_stall_recovery_message(
+    stall_count: usize,
+    repeated_status: Option<&str>,
+) -> String {
+    let repeated_status = trimmed_repeated_status(repeated_status);
+    format!(
+        "Your last visible update repeated without concrete progress {stall_count} time(s): \"{repeated_status}\". Take a concrete next action now instead of another status update. If you just completed a subtask, immediately choose the next concrete task and continue. If a required external dependency is missing, end with {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG}."
     )
 }
 
@@ -71,7 +97,7 @@ pub(crate) fn normalize_execute_progress_message(text: &str) -> Option<String> {
 }
 
 fn assistant_control_signal_from_text(text: &str, mode: ModeKind) -> AssistantControlSignal {
-    if mode != ModeKind::Execute {
+    if !mode.is_autonomous() {
         return AssistantControlSignal::Continue;
     }
     if text.contains(AWAIT_USER_INPUT_OPEN_TAG) {
@@ -83,7 +109,7 @@ fn assistant_control_signal_from_text(text: &str, mode: ModeKind) -> AssistantCo
     AssistantControlSignal::Continue
 }
 
-fn strip_execute_control_tags(text: &str) -> String {
+fn strip_autonomous_control_tags(text: &str) -> String {
     text.replace(TASK_COMPLETE_OPEN_TAG, "")
         .replace(TASK_COMPLETE_CLOSE_TAG, "")
         .replace(AWAIT_USER_INPUT_OPEN_TAG, "")
@@ -97,8 +123,8 @@ fn strip_hidden_assistant_markup(text: &str, mode: ModeKind) -> String {
     } else {
         without_citations
     };
-    if mode == ModeKind::Execute {
-        strip_execute_control_tags(&without_plan)
+    if mode.is_autonomous() {
+        strip_autonomous_control_tags(&without_plan)
     } else {
         without_plan
     }

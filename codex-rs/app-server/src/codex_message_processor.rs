@@ -7289,6 +7289,14 @@ mod tests {
             model: "gpt-5".to_string(),
             model_provider_id: "openai".to_string(),
             service_tier: Some(codex_protocol::config_types::ServiceTier::Flex),
+            collaboration_mode: codex_protocol::config_types::CollaborationMode {
+                mode: codex_protocol::config_types::ModeKind::Execute,
+                settings: codex_protocol::config_types::Settings {
+                    model: "gpt-5".to_string(),
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
+            },
             approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
             sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
             cwd: PathBuf::from("/tmp"),

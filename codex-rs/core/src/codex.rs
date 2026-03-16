@@ -47,6 +47,9 @@ use crate::stream_events_utils::execute_mode_stall_recovery_message;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
+use crate::stream_events_utils::non_stop_mode_auto_continue_message;
+use crate::stream_events_utils::non_stop_mode_stall_recovery_message;
+use crate::stream_events_utils::non_stop_mode_subtask_continue_message;
 use crate::stream_events_utils::normalize_execute_progress_message;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
 use crate::stream_events_utils::record_completed_response_item;
@@ -917,6 +920,7 @@ impl SessionConfiguration {
             model: self.collaboration_mode.model().to_string(),
             model_provider_id: self.original_config_do_not_use.model_provider_id.clone(),
             service_tier: self.service_tier,
+            collaboration_mode: self.collaboration_mode.clone(),
             approval_policy: self.approval_policy.value(),
             sandbox_policy: self.sandbox_policy.get().clone(),
             cwd: self.cwd.clone(),
@@ -5187,13 +5191,17 @@ pub(crate) async fn run_turn(
                     continue;
                 }
 
-                if needs_follow_up && turn_context.collaboration_mode.mode == ModeKind::Execute {
+                if needs_follow_up && turn_context.collaboration_mode.mode.is_autonomous() {
                     execute_stall_count = 0;
                     last_execute_progress_message = None;
                 }
 
                 if !needs_follow_up {
-                    if turn_context.collaboration_mode.mode == ModeKind::Execute {
+                    let autonomous_mode = turn_context.collaboration_mode.mode;
+                    if autonomous_mode.is_autonomous() {
+                        let mode_name = autonomous_mode.display_name();
+                        let auto_continuation_limit =
+                            autonomous_auto_continuation_limit(autonomous_mode);
                         match assistant_control_signal {
                             AssistantControlSignal::Continue => {
                                 let current_progress_message = sampling_request_last_agent_message
@@ -5214,19 +5222,18 @@ pub(crate) async fn run_turn(
                                         &turn_context,
                                         EventMsg::Warning(WarningEvent {
                                             message: format!(
-                                                "Execute mode detected {EXECUTE_STALL_LIMIT} consecutive status-only responses without concrete progress; ending the turn to avoid a no-progress loop."
+                                                "{mode_name} mode detected {EXECUTE_STALL_LIMIT} consecutive status-only responses without concrete progress; ending the turn to avoid a no-progress loop."
                                             ),
                                         }),
                                     )
                                     .await;
-                                } else if execute_auto_continuation_count
-                                    >= EXECUTE_AUTO_CONTINUATION_LIMIT
+                                } else if execute_auto_continuation_count >= auto_continuation_limit
                                 {
                                     sess.send_event(
                                         &turn_context,
                                         EventMsg::Warning(WarningEvent {
                                             message: format!(
-                                                "Execute mode reached the auto-continuation limit ({EXECUTE_AUTO_CONTINUATION_LIMIT}); ending the turn without an explicit completion marker."
+                                                "{mode_name} mode reached the auto-continuation limit ({auto_continuation_limit}); ending the turn without an explicit completion marker."
                                             ),
                                         }),
                                     )
@@ -5235,14 +5242,43 @@ pub(crate) async fn run_turn(
                                     let developer_message = if execute_stall_count
                                         >= EXECUTE_STALL_ESCALATION_THRESHOLD
                                     {
-                                        execute_mode_stall_recovery_message(
-                                            execute_stall_count,
-                                            sampling_request_last_agent_message.as_deref(),
-                                        )
+                                        match autonomous_mode {
+                                            ModeKind::Execute => {
+                                                execute_mode_stall_recovery_message(
+                                                    execute_stall_count,
+                                                    sampling_request_last_agent_message.as_deref(),
+                                                )
+                                            }
+                                            ModeKind::NonStop => {
+                                                non_stop_mode_stall_recovery_message(
+                                                    execute_stall_count,
+                                                    sampling_request_last_agent_message.as_deref(),
+                                                )
+                                            }
+                                            ModeKind::Plan
+                                            | ModeKind::Default
+                                            | ModeKind::PairProgramming => {
+                                                unreachable!("non-autonomous mode filtered above")
+                                            }
+                                        }
                                     } else {
-                                        execute_mode_auto_continue_message(
-                                            execute_auto_continuation_count + 1,
-                                        )
+                                        match autonomous_mode {
+                                            ModeKind::Execute => {
+                                                execute_mode_auto_continue_message(
+                                                    execute_auto_continuation_count + 1,
+                                                )
+                                            }
+                                            ModeKind::NonStop => {
+                                                non_stop_mode_auto_continue_message(
+                                                    execute_auto_continuation_count + 1,
+                                                )
+                                            }
+                                            ModeKind::Plan
+                                            | ModeKind::Default
+                                            | ModeKind::PairProgramming => {
+                                                unreachable!("non-autonomous mode filtered above")
+                                            }
+                                        }
                                     };
                                     if sess
                                         .inject_response_items(vec![ResponseInputItem::Message {
@@ -5257,6 +5293,38 @@ pub(crate) async fn run_turn(
                                         execute_auto_continuation_count += 1;
                                         continue;
                                     }
+                                }
+                            }
+                            AssistantControlSignal::TaskComplete
+                                if autonomous_mode == ModeKind::NonStop =>
+                            {
+                                execute_stall_count = 0;
+                                last_execute_progress_message = None;
+
+                                if execute_auto_continuation_count >= auto_continuation_limit {
+                                    sess.send_event(
+                                        &turn_context,
+                                        EventMsg::Warning(WarningEvent {
+                                            message: format!(
+                                                "Non-stop mode reached the auto-continuation limit ({auto_continuation_limit}); ending the turn after a completed subtask."
+                                            ),
+                                        }),
+                                    )
+                                    .await;
+                                } else if sess
+                                    .inject_response_items(vec![ResponseInputItem::Message {
+                                        role: "developer".to_string(),
+                                        content: vec![ContentItem::InputText {
+                                            text: non_stop_mode_subtask_continue_message(
+                                                execute_auto_continuation_count + 1,
+                                            ),
+                                        }],
+                                    }])
+                                    .await
+                                    .is_ok()
+                                {
+                                    execute_auto_continuation_count += 1;
+                                    continue;
                                 }
                             }
                             AssistantControlSignal::AwaitUserInput
@@ -5839,8 +5907,17 @@ struct SamplingRequestResult {
 }
 
 const EXECUTE_AUTO_CONTINUATION_LIMIT: usize = 16;
+const NON_STOP_AUTO_CONTINUATION_LIMIT: usize = 256;
 const EXECUTE_STALL_ESCALATION_THRESHOLD: usize = 1;
 const EXECUTE_STALL_LIMIT: usize = 4;
+
+const fn autonomous_auto_continuation_limit(mode: ModeKind) -> usize {
+    match mode {
+        ModeKind::Execute => EXECUTE_AUTO_CONTINUATION_LIMIT,
+        ModeKind::NonStop => NON_STOP_AUTO_CONTINUATION_LIMIT,
+        ModeKind::Plan | ModeKind::Default | ModeKind::PairProgramming => 0,
+    }
+}
 
 /// Ephemeral per-response state for streaming a single proposed plan.
 /// This is intentionally not persisted or stored in session/state since it
