@@ -1,6 +1,9 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use anyhow::Result;
+use codex_core::non_stop_checkpoint_path;
+use codex_core::NonStopCheckpoint;
+use codex_core::NonStopCheckpointStatus;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -359,6 +362,19 @@ async fn non_stop_mode_continues_after_completed_subtask() -> Result<()> {
             .any(|text| text.contains(NON_STOP_AUTO_CONTINUE_PREFIX)),
         "follow-up status updates should keep non-stop mode moving"
     );
+
+    let checkpoint_path =
+        non_stop_checkpoint_path(test.codex_home_path(), test.session_configured.session_id);
+    let checkpoint: NonStopCheckpoint = serde_json::from_str(
+        &std::fs::read_to_string(&checkpoint_path).expect("read non-stop checkpoint"),
+    )
+    .expect("parse checkpoint");
+    assert_eq!(checkpoint.status, NonStopCheckpointStatus::TurnComplete);
+    assert_eq!(
+        checkpoint.last_agent_message.as_deref(),
+        Some("I need production credentials.")
+    );
+    assert_eq!(checkpoint.model, test.session_configured.model);
 
     Ok(())
 }

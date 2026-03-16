@@ -49,6 +49,10 @@ After Phase 1 is stable, add a persistent supervisor above turn execution:
 - restart recovery from rollout + state DB
 - pause / sleep / retry scheduling that is policy-driven rather than prompt-only
 
+The current groundwork now persists per-thread `Non-stop` checkpoints under:
+
+- `CODEX_HOME/non-stop-checkpoints/<thread_id>.json`
+
 ### Phase 3: constrained self-directed innovation
 
 Autonomous innovation should be explicit and bounded:

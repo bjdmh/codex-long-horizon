@@ -32,6 +32,7 @@ use crate::features::maybe_push_unstable_features_warning;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::models_manager::manager::ModelsManager;
+use crate::non_stop_checkpoint;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::realtime_conversation::RealtimeConversationManager;
@@ -2412,6 +2413,13 @@ impl Session {
             id: turn_context.sub_id.clone(),
             msg,
         };
+        non_stop_checkpoint::maybe_persist_checkpoint(
+            turn_context.config.codex_home.as_path(),
+            self.conversation_id,
+            turn_context,
+            &legacy_source,
+        )
+        .await;
         self.send_event_raw(event).await;
         self.maybe_mirror_event_text_to_realtime(&legacy_source)
             .await;
