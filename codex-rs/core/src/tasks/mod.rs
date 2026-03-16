@@ -211,13 +211,11 @@ impl Session {
         turn_context: Arc<TurnContext>,
         last_agent_message: Option<String>,
     ) {
-        warn!(turn_id = %turn_context.sub_id, "on_task_finished: entered");
         turn_context
             .turn_metadata_state
             .cancel_git_enrichment_task();
 
         let mut active = self.active_turn.lock().await;
-        warn!(turn_id = %turn_context.sub_id, "on_task_finished: acquired active_turn lock");
         let mut pending_input = Vec::<ResponseInputItem>::new();
         let mut should_clear_active_turn = false;
         let mut token_usage_at_turn_start = None;
@@ -227,7 +225,6 @@ impl Session {
             && at.remove_task(&turn_context.sub_id)
         {
             let mut ts = at.turn_state.lock().await;
-            warn!(turn_id = %turn_context.sub_id, "on_task_finished: acquired turn_state lock");
             pending_input = ts.take_pending_input();
             turn_tool_calls = ts.tool_calls;
             token_usage_at_turn_start = Some(ts.token_usage_at_turn_start.clone());
@@ -238,7 +235,6 @@ impl Session {
             *active = None;
         }
         drop(active);
-        warn!(turn_id = %turn_context.sub_id, "on_task_finished: before send_event");
         if !pending_input.is_empty() {
             let pending_response_items = pending_input
                 .into_iter()
@@ -330,7 +326,6 @@ impl Session {
             completion_reason,
         });
         self.send_event(turn_context.as_ref(), event).await;
-        warn!(turn_id = %turn_context.sub_id, "on_task_finished: done");
     }
 
     async fn register_new_active_task(&self, task: RunningTask) {

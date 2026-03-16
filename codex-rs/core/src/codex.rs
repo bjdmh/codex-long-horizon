@@ -2414,16 +2414,16 @@ impl Session {
             id: turn_context.sub_id.clone(),
             msg,
         };
+        non_stop_checkpoint::maybe_persist_checkpoint(
+            turn_context.config.codex_home.as_path(),
+            self.conversation_id,
+            turn_context,
+            &legacy_source,
+        )
+        .await;
         if is_terminal_event(&legacy_source) {
             self.send_event_raw_prioritized(event).await;
         } else {
-            non_stop_checkpoint::maybe_persist_checkpoint(
-                turn_context.config.codex_home.as_path(),
-                self.conversation_id,
-                turn_context,
-                &legacy_source,
-            )
-            .await;
             self.send_event_raw(event).await;
         }
         self.maybe_mirror_event_text_to_realtime(&legacy_source)
@@ -5415,11 +5415,6 @@ pub(crate) async fn run_turn(
                         .await;
                         return None;
                     }
-                    warn!(
-                        turn_id = %turn_context.sub_id,
-                        ?assistant_control_signal,
-                        "run_turn: breaking after completed sampling cycle"
-                    );
                     break;
                 }
                 continue;
@@ -5454,10 +5449,6 @@ pub(crate) async fn run_turn(
         }
     }
 
-    warn!(
-        turn_id = %turn_context.sub_id,
-        "run_turn: returning last_agent_message"
-    );
     last_agent_message
 }
 
@@ -6664,7 +6655,6 @@ async fn try_run_sampling_request(
                     assistant_control_signal,
                     AssistantControlSignal::AwaitUserInput | AssistantControlSignal::TaskComplete
                 ) {
-                    warn!(turn_id = %turn_context.sub_id, ?assistant_control_signal, "setting terminal drain deadline");
                     terminal_signal_deadline = Some(Instant::now() + TERMINAL_SIGNAL_DRAIN_TIMEOUT);
                 }
             }
@@ -6746,7 +6736,6 @@ async fn try_run_sampling_request(
                 response_id: _,
                 token_usage,
             } => {
-                warn!(turn_id = %turn_context.sub_id, ?assistant_control_signal, "received response.completed");
                 flush_assistant_text_segments_all(
                     &sess,
                     &turn_context,

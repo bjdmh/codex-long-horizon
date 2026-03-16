@@ -13,7 +13,6 @@ use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::trace_span;
-use tracing::warn;
 
 use super::SessionTask;
 use super::SessionTaskContext;
@@ -81,7 +80,6 @@ impl SessionTask for RegularTask {
         cancellation_token: CancellationToken,
     ) -> Option<String> {
         let sess = session.clone_session();
-        let turn_id = ctx.sub_id.clone();
         let run_turn_span = trace_span!("run_turn");
         sess.set_server_reasoning_included(false).await;
         let prewarmed_client_session = self.take_prewarmed_session().await;
@@ -94,9 +92,7 @@ impl SessionTask for RegularTask {
         )
         .instrument(run_turn_span)
         .await;
-        warn!(turn_id = %turn_id, "regular task: run_turn returned to RegularTask::run");
         if !cancellation_token.is_cancelled() {
-            warn!(turn_id = %turn_id, "regular task: spawning on_task_finished");
             let sess_for_finish = sess.clone();
             let ctx_for_finish = Arc::clone(&ctx);
             let result_for_finish = result.clone();

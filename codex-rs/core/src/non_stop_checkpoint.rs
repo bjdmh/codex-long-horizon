@@ -77,7 +77,10 @@ pub async fn read_non_stop_checkpoint(
     Some(checkpoint)
 }
 
-async fn read_checkpoint_from_disk(codex_home: &Path, thread_id: ThreadId) -> Option<NonStopCheckpoint> {
+async fn read_checkpoint_from_disk(
+    codex_home: &Path,
+    thread_id: ThreadId,
+) -> Option<NonStopCheckpoint> {
     let path = checkpoint_path(codex_home, thread_id);
     let data = tokio::fs::read(&path).await.ok()?;
     serde_json::from_slice(&data).ok()
@@ -173,7 +176,14 @@ pub(crate) async fn maybe_persist_checkpoint(
             checkpoint.last_agent_message = Some(event.message.clone());
         }
         EventMsg::ShutdownComplete => {
-            checkpoint.status = NonStopCheckpointStatus::Shutdown;
+            if !matches!(
+                checkpoint.status,
+                NonStopCheckpointStatus::TurnComplete
+                    | NonStopCheckpointStatus::TurnAborted
+                    | NonStopCheckpointStatus::Error
+            ) {
+                checkpoint.status = NonStopCheckpointStatus::Shutdown;
+            }
         }
         _ => return,
     }

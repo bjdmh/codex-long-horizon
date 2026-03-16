@@ -189,7 +189,7 @@ async fn non_stop_uses_non_stop_defaults_without_rewriting_codex_home() -> anyho
             .expect("read checkpoint"),
     )
     .expect("parse checkpoint");
-    assert_eq!(checkpoint.status, NonStopCheckpointStatus::TurnAborted);
+    assert_eq!(checkpoint.status, NonStopCheckpointStatus::TurnComplete);
     assert_eq!(checkpoint.goal_prompt.as_deref(), Some("non-stop behavior"));
     assert_eq!(
         checkpoint.last_assistant_control_signal,
@@ -270,12 +270,76 @@ async fn non_stop_auto_starts_follow_up_turn_until_blocked() -> anyhow::Result<(
             .expect("read checkpoint"),
     )
     .expect("parse checkpoint");
-    assert_eq!(checkpoint.status, NonStopCheckpointStatus::TurnAborted);
+    assert_eq!(checkpoint.status, NonStopCheckpointStatus::TurnComplete);
     assert_eq!(
         checkpoint.last_assistant_control_signal,
         Some(NonStopCheckpointControlSignal::AwaitUserInput)
     );
     assert_eq!(checkpoint.goal_prompt.as_deref(), Some("ship the feature"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_stop_task_complete_stops_cleanly_and_writes_last_message() -> anyhow::Result<()> {
+    let test = test_codex_exec();
+    let server = responses::start_mock_server().await;
+    let requests = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_assistant_message(
+                "msg-1",
+                "Checked for the next step.\n<task_complete>Nothing meaningful remains.</task_complete>",
+            ),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let last_message_path = test.home_path().join("last-message.txt");
+
+    test.cmd_with_server(&server)
+        .arg("--skip-git-repo-check")
+        .arg("--non-stop")
+        .arg("--output-last-message")
+        .arg(&last_message_path)
+        .arg("finish the migration")
+        .assert()
+        .code(0);
+
+    assert_eq!(requests.requests().len(), 1);
+    assert_eq!(
+        std::fs::read_to_string(&last_message_path)?,
+        "Checked for the next step.\nNothing meaningful remains."
+    );
+
+    let thread_id = extract_conversation_id(
+        &find_session_file_containing_marker(
+            &test.home_path().join("sessions"),
+            "finish the migration",
+        )
+        .expect("session file"),
+    );
+    let thread_id =
+        codex_protocol::ThreadId::from_string(&thread_id).expect("parse checkpoint thread id");
+    let checkpoint: NonStopCheckpoint = serde_json::from_str(
+        &std::fs::read_to_string(non_stop_checkpoint_path(test.home_path(), thread_id))
+            .expect("read checkpoint"),
+    )
+    .expect("parse checkpoint");
+    assert_eq!(checkpoint.status, NonStopCheckpointStatus::TurnComplete);
+    assert_eq!(
+        checkpoint.last_assistant_control_signal,
+        Some(NonStopCheckpointControlSignal::TaskComplete)
+    );
+    assert_eq!(
+        checkpoint.last_agent_message.as_deref(),
+        Some("Checked for the next step.\nNothing meaningful remains.")
+    );
+    assert_eq!(
+        checkpoint.goal_prompt.as_deref(),
+        Some("finish the migration")
+    );
 
     Ok(())
 }
