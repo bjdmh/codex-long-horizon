@@ -34,6 +34,8 @@ To clone an existing CODEX_HOME into an Execute-mode experiment home, run:
 
 - `just long-horizon-home`
 
+By default the helper uses the current `CODEX_HOME` when set, otherwise
+`~/.codex`, and writes the derived home to `<source>-long-horizon`.
 You can override `SRC_HOME` and `DST_HOME` when needed.
 
 For a single command that prepares prerequisites, creates the experiment home,

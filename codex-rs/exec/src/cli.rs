@@ -44,6 +44,10 @@ pub struct Cli {
     #[arg(long = "profile", short = 'p')]
     pub config_profile: Option<String>,
 
+    /// Run in Non-stop mode for this invocation.
+    #[arg(long = "non-stop", default_value_t = false, global = true)]
+    pub non_stop: bool,
+
     /// Convenience alias for low-friction sandboxed automatic execution (-a on-request, --sandbox workspace-write).
     #[arg(long = "full-auto", default_value_t = false, global = true)]
     pub full_auto: bool,
@@ -314,5 +318,18 @@ mod tests {
         };
         assert_eq!(args.session_id.as_deref(), Some("session-123"));
         assert_eq!(args.prompt.as_deref(), Some(PROMPT));
+    }
+
+    #[test]
+    fn parses_non_stop_flag() {
+        let cli = Cli::parse_from([
+            "codex-exec",
+            "--non-stop",
+            "--skip-git-repo-check",
+            "keep going",
+        ]);
+
+        assert!(cli.non_stop);
+        assert_eq!(cli.prompt.as_deref(), Some("keep going"));
     }
 }

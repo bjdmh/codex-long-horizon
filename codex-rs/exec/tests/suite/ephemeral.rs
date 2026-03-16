@@ -74,6 +74,44 @@ fn default_exec_sessions_use_execute_collaboration_mode() -> anyhow::Result<()> 
 }
 
 #[test]
+fn non_stop_uses_non_stop_defaults_without_rewriting_codex_home() -> anyhow::Result<()> {
+    let test = test_codex_exec();
+    let fixture = find_resource!("tests/fixtures/cli_responses_fixture.sse")?;
+    let source_config = test.home_path().join("config.toml");
+    std::fs::write(
+        &source_config,
+        "model = \"gpt-4.1\"\ninitial_collaboration_mode = \"execute\"\n",
+    )?;
+
+    test.cmd()
+        .env("CODEX_RS_SSE_FIXTURE", &fixture)
+        .env("OPENAI_BASE_URL", "http://unused.local")
+        .arg("--skip-git-repo-check")
+        .arg("--non-stop")
+        .arg("non-stop behavior")
+        .assert()
+        .code(0);
+
+    assert_eq!(session_rollout_count(test.home_path()), 1);
+    assert_eq!(
+        std::fs::read_to_string(&source_config)?,
+        "model = \"gpt-4.1\"\ninitial_collaboration_mode = \"execute\"\n"
+    );
+
+    let rollout = session_rollout_contents(test.home_path());
+    assert!(
+        rollout.contains("Collaboration Style: Non-stop"),
+        "expected Non-stop collaboration instructions in session rollout, got: {rollout}"
+    );
+    assert!(
+        rollout.contains("gpt-5.4"),
+        "expected Non-stop default model in session rollout, got: {rollout}"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn does_not_persist_rollout_file_in_ephemeral_mode() -> anyhow::Result<()> {
     let test = test_codex_exec();
     let fixture = find_resource!("tests/fixtures/cli_responses_fixture.sse")?;

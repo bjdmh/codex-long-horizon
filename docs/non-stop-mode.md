@@ -75,3 +75,16 @@ Autonomous innovation should be explicit and bounded:
 - optional plain-text "should I continue?" questions still do not pause the run
 - the mode must remain visible in TUI / app-server APIs so clients can observe it
 
+## CLI usage
+
+Use:
+
+- `codex exec --non-stop "your goal"`
+
+This flag keeps using the current `CODEX_HOME` and runs with:
+
+- `initial_collaboration_mode = "non_stop"` for the current invocation
+- default model `gpt-5.4` unless you explicitly pass `--model`
+
+If you want an isolated home for testing, create that derived `CODEX_HOME`
+yourself first and then invoke `codex exec --non-stop` against it.

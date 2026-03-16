@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-CODEX_HOME_DIR=${CODEX_HOME_DIR:-/root/.paolu-codex-long-horizon}
+CODEX_HOME_DIR=${CODEX_HOME_DIR:-${CODEX_HOME:-$HOME/.codex-long-horizon}}
 WORK_BASE=${WORK_BASE:-/tmp/long-horizon-suite}
 BENCH_RUNS=${BENCH_RUNS:-1}
 SOAK_RUNS=${SOAK_RUNS:-3}

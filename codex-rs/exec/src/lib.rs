@@ -37,7 +37,10 @@ use codex_core::models_manager::manager::RefreshStrategy;
 use codex_otel::set_parent_from_context;
 use codex_otel::traceparent_context_from_env;
 use codex_protocol::approvals::ElicitationAction;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::Settings;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -80,6 +83,7 @@ use codex_core::find_thread_path_by_id_str;
 use codex_core::find_thread_path_by_name_str;
 
 const DEFAULT_ANALYTICS_ENABLED: bool = true;
+const NON_STOP_DEFAULT_MODEL: &str = "gpt-5.4";
 
 enum InitialOperation {
     UserTurn {
@@ -137,6 +141,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         oss,
         oss_provider,
         config_profile,
+        non_stop,
         full_auto,
         dangerously_bypass_approvals_and_sandbox,
         cwd,
@@ -152,6 +157,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         config_overrides,
         progress_cursor,
     } = cli;
+    let mut config_overrides = config_overrides;
 
     let (_stdout_with_ansi, stderr_with_ansi) = match color {
         cli::Color::Always => (true, true),
@@ -200,6 +206,11 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     } else {
         sandbox_mode_cli_arg.map(Into::<SandboxMode>::into)
     };
+    if non_stop {
+        config_overrides
+            .raw_overrides
+            .push("initial_collaboration_mode=\"non_stop\"".to_string());
+    }
 
     // Parse `-c` overrides from the CLI.
     let cli_kv_overrides = match config_overrides.parse_overrides() {
@@ -292,6 +303,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             .as_ref()
             .and_then(|provider_id| get_default_model_for_oss_provider(provider_id))
             .map(std::borrow::ToOwned::to_owned)
+    } else if non_stop {
+        Some(NON_STOP_DEFAULT_MODEL.to_string())
     } else {
         None // No model specified, will use the default.
     };
@@ -489,6 +502,15 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         .get_models_manager()
         .get_default_model(&config.model, RefreshStrategy::OnlineIfUncached)
         .await;
+    let requested_collaboration_mode = (config.initial_collaboration_mode == ModeKind::NonStop)
+        .then_some(CollaborationMode {
+            mode: ModeKind::NonStop,
+            settings: Settings {
+                model: default_model.clone(),
+                reasoning_effort: default_effort,
+                developer_instructions: None,
+            },
+        });
 
     // Handle resume subcommand by resolving a rollout path and using explicit resume API.
     let NewThread {
@@ -646,7 +668,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     summary: None,
                     service_tier: None,
                     final_output_json_schema: output_schema,
-                    collaboration_mode: None,
+                    collaboration_mode: requested_collaboration_mode.clone(),
                     personality: None,
                 })
                 .await?;
