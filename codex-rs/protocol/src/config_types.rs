@@ -212,7 +212,10 @@ impl ModeKind {
     }
 
     pub const fn is_tui_visible(self) -> bool {
-        matches!(self, Self::Plan | Self::Default | Self::Execute | Self::NonStop)
+        matches!(
+            self,
+            Self::Plan | Self::Default | Self::Execute | Self::NonStop
+        )
     }
 
     pub const fn is_autonomous(self) -> bool {
