@@ -1,6 +1,6 @@
 [package]
 name = "codex-cli"
-version = "0.111.2"
+version = "0.111.5"
 edition.workspace = true
 license.workspace = true
 
