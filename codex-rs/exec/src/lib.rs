@@ -18,6 +18,9 @@ use codex_cloud_requirements::cloud_requirements_loader;
 use codex_core::AuthManager;
 use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_core::NewThread;
+use codex_core::NonStopCheckpoint;
+use codex_core::NonStopCheckpointControlSignal;
+use codex_core::NonStopCheckpointStatus;
 use codex_core::OLLAMA_OSS_PROVIDER_ID;
 use codex_core::ThreadManager;
 use codex_core::auth::enforce_login_restrictions;
@@ -34,6 +37,7 @@ use codex_core::format_exec_policy_error_with_source;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::manager::RefreshStrategy;
+use codex_core::read_non_stop_checkpoint;
 use codex_core::register_non_stop_session;
 use codex_otel::set_parent_from_context;
 use codex_otel::traceparent_context_from_env;
@@ -50,6 +54,7 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TurnCompleteReason;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_oss::ensure_oss_provider_ready;
@@ -119,6 +124,17 @@ struct ExecRunArgs {
     prompt: Option<String>,
     skip_git_repo_check: bool,
     stderr_with_ansi: bool,
+}
+
+#[derive(Clone)]
+struct TurnSubmitDefaults {
+    cwd: PathBuf,
+    approval_policy: AskForApproval,
+    sandbox_policy: codex_protocol::protocol::SandboxPolicy,
+    model: String,
+    effort: Option<codex_protocol::openai_models::ReasoningEffort>,
+    collaboration_mode: Option<CollaborationMode>,
+    output_schema: Option<Value>,
 }
 
 fn exec_root_span() -> tracing::Span {
@@ -503,6 +519,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         .get_models_manager()
         .get_default_model(&config.model, RefreshStrategy::OnlineIfUncached)
         .await;
+    let output_schema = load_output_schema(output_schema_path.clone());
     let requested_collaboration_mode = (config.initial_collaboration_mode == ModeKind::NonStop)
         .then_some(CollaborationMode {
             mode: ModeKind::NonStop,
@@ -512,6 +529,15 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 developer_instructions: None,
             },
         });
+    let turn_submit_defaults = TurnSubmitDefaults {
+        cwd: default_cwd.clone(),
+        approval_policy: default_approval_policy,
+        sandbox_policy: default_sandbox_policy.clone(),
+        model: default_model.clone(),
+        effort: default_effort,
+        collaboration_mode: requested_collaboration_mode.clone(),
+        output_schema: output_schema.clone(),
+    };
 
     // Handle resume subcommand by resolving a rollout path and using explicit resume API.
     let NewThread {
@@ -534,11 +560,12 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let primary_thread_id_for_span = primary_thread_id.to_string();
     exec_span.record("thread.id", primary_thread_id_for_span.as_str());
 
-    let (initial_operation, prompt_summary) = match (command, prompt, images) {
+    let (initial_operation, prompt_summary, non_stop_goal_prompt) = match (command, prompt, images)
+    {
         (Some(ExecCommand::Review(review_cli)), _, _) => {
             let review_request = build_review_request(review_cli)?;
             let summary = codex_core::review_prompts::user_facing_hint(&review_request.target);
-            (InitialOperation::Review { review_request }, summary)
+            (InitialOperation::Review { review_request }, summary, None)
         }
         (Some(ExecCommand::Resume(args)), root_prompt, imgs) => {
             let prompt_arg = args
@@ -552,7 +579,28 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     }
                 })
                 .or(root_prompt);
-            let prompt_text = resolve_prompt(prompt_arg);
+            let checkpoint = if config.initial_collaboration_mode == ModeKind::NonStop {
+                read_non_stop_checkpoint(config.codex_home.as_path(), primary_thread_id).await
+            } else {
+                None
+            };
+            let (prompt_text, goal_prompt) = match prompt_arg {
+                Some(prompt) => {
+                    let prompt_text = resolve_prompt(Some(prompt));
+                    (prompt_text.clone(), Some(prompt_text))
+                }
+                None if config.initial_collaboration_mode == ModeKind::NonStop => (
+                    checkpoint
+                        .as_ref()
+                        .map(build_non_stop_supervisor_prompt)
+                        .unwrap_or_else(|| resolve_prompt(None)),
+                    checkpoint.and_then(|checkpoint| checkpoint.goal_prompt),
+                ),
+                None => {
+                    let prompt_text = resolve_prompt(None);
+                    (prompt_text.clone(), Some(prompt_text))
+                }
+            };
             let mut items: Vec<UserInput> = imgs
                 .into_iter()
                 .chain(args.images.into_iter())
@@ -563,13 +611,13 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 // CLI input doesn't track UI element ranges, so none are available here.
                 text_elements: Vec::new(),
             });
-            let output_schema = load_output_schema(output_schema_path.clone());
             (
                 InitialOperation::UserTurn {
                     items,
-                    output_schema,
+                    output_schema: output_schema.clone(),
                 },
                 prompt_text,
+                goal_prompt,
             )
         }
         (None, root_prompt, imgs) => {
@@ -583,13 +631,13 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 // CLI input doesn't track UI element ranges, so none are available here.
                 text_elements: Vec::new(),
             });
-            let output_schema = load_output_schema(output_schema_path);
             (
                 InitialOperation::UserTurn {
                     items,
-                    output_schema,
+                    output_schema: output_schema.clone(),
                 },
-                prompt_text,
+                prompt_text.clone(),
+                Some(prompt_text),
             )
         }
     };
@@ -604,7 +652,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             session_configured.model.as_str(),
             session_configured.cwd.as_path(),
             SessionSource::Exec,
-            Some(prompt_summary.clone()),
+            non_stop_goal_prompt,
         )
         .await;
     }
@@ -672,10 +720,10 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             let task_id = thread
                 .submit(Op::UserTurn {
                     items,
-                    cwd: default_cwd,
+                    cwd: default_cwd.clone(),
                     approval_policy: default_approval_policy,
                     sandbox_policy: default_sandbox_policy.clone(),
-                    model: default_model,
+                    model: default_model.clone(),
                     effort: default_effort,
                     summary: None,
                     service_tier: None,
@@ -746,13 +794,43 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         if thread_id != primary_thread_id && matches!(&event.msg, EventMsg::TurnComplete(_)) {
             continue;
         }
+        let primary_turn_complete_reason = if thread_id == primary_thread_id {
+            match &event.msg {
+                EventMsg::TurnComplete(event) => Some(event.completion_reason.clone()),
+                _ => None,
+            }
+        } else {
+            None
+        };
         let shutdown = event_processor.process_event(event);
+        if !shutdown_requested
+            && thread_id == primary_thread_id
+            && config.initial_collaboration_mode == ModeKind::NonStop
+            && non_stop_blocker_requests_shutdown(&config, primary_thread_id).await
+        {
+            thread.submit(Op::Shutdown).await?;
+            shutdown_requested = true;
+            continue;
+        }
         if thread_id != primary_thread_id && matches!(shutdown, CodexStatus::InitiateShutdown) {
             continue;
         }
         match shutdown {
             CodexStatus::Running => continue,
             CodexStatus::InitiateShutdown => {
+                if primary_turn_complete_reason == Some(TurnCompleteReason::Completed)
+                    && config.initial_collaboration_mode == ModeKind::NonStop
+                    && maybe_submit_non_stop_follow_up_turn(
+                        &config,
+                        primary_thread_id,
+                        &thread,
+                        &turn_submit_defaults,
+                        &exec_span,
+                    )
+                    .await?
+                {
+                    continue;
+                }
                 if !shutdown_requested {
                     thread.submit(Op::Shutdown).await?;
                     shutdown_requested = true;
@@ -872,6 +950,99 @@ async fn resolve_resume_path(
     } else {
         Ok(None)
     }
+}
+
+fn build_non_stop_supervisor_prompt(checkpoint: &NonStopCheckpoint) -> String {
+    let goal = checkpoint.goal_prompt.as_deref().unwrap_or(
+        "Continue making progress on the current non-stop goal from the existing thread state.",
+    );
+    let mut prompt = format!(
+        "Resume Non-stop execution toward the active goal.\nGoal: {goal}\nReview the existing thread state, avoid redoing finished work, and immediately choose the next highest-leverage concrete task."
+    );
+    match checkpoint.status {
+        NonStopCheckpointStatus::TurnComplete => {}
+        NonStopCheckpointStatus::TurnAborted | NonStopCheckpointStatus::Error => {
+            prompt.push_str(
+                "\nThe last turn ended early. Recover from that interruption and continue.",
+            );
+        }
+        NonStopCheckpointStatus::Pending
+        | NonStopCheckpointStatus::Running
+        | NonStopCheckpointStatus::Shutdown => {
+            prompt.push_str(
+                "\nThe previous run did not finish cleanly. Reconstruct state from the thread and keep going.",
+            );
+        }
+    }
+    if let Some(last_agent_message) = checkpoint
+        .last_agent_message
+        .as_deref()
+        .map(str::trim)
+        .filter(|message| !message.is_empty())
+    {
+        prompt.push_str(&format!(
+            "\nMost recent agent summary: {last_agent_message}"
+        ));
+    }
+    prompt.push_str(
+        "\nOnly stop if you are blocked on information the user must provide, and then include <await_user_input>...</await_user_input>.",
+    );
+    prompt
+}
+
+async fn maybe_submit_non_stop_follow_up_turn(
+    config: &Config,
+    thread_id: codex_protocol::ThreadId,
+    thread: &Arc<codex_core::CodexThread>,
+    defaults: &TurnSubmitDefaults,
+    exec_span: &tracing::Span,
+) -> anyhow::Result<bool> {
+    let Some(checkpoint) = read_non_stop_checkpoint(config.codex_home.as_path(), thread_id).await
+    else {
+        return Ok(false);
+    };
+    if checkpoint.status != NonStopCheckpointStatus::TurnComplete
+        || checkpoint.last_assistant_control_signal
+            == Some(NonStopCheckpointControlSignal::AwaitUserInput)
+    {
+        return Ok(false);
+    }
+
+    let prompt = build_non_stop_supervisor_prompt(&checkpoint);
+    let task_id = thread
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: prompt,
+                text_elements: Vec::new(),
+            }],
+            cwd: defaults.cwd.clone(),
+            approval_policy: defaults.approval_policy,
+            sandbox_policy: defaults.sandbox_policy.clone(),
+            model: defaults.model.clone(),
+            effort: defaults.effort,
+            summary: None,
+            service_tier: None,
+            final_output_json_schema: defaults.output_schema.clone(),
+            collaboration_mode: defaults.collaboration_mode.clone(),
+            personality: None,
+        })
+        .await?;
+    exec_span.record("turn.id", task_id.as_str());
+    info!("Started non-stop follow-up turn with event ID: {task_id}");
+    Ok(true)
+}
+
+async fn non_stop_blocker_requests_shutdown(
+    config: &Config,
+    thread_id: codex_protocol::ThreadId,
+) -> bool {
+    read_non_stop_checkpoint(config.codex_home.as_path(), thread_id)
+        .await
+        .is_some_and(|checkpoint| {
+            checkpoint.status == NonStopCheckpointStatus::Running
+                && checkpoint.last_assistant_control_signal
+                    == Some(NonStopCheckpointControlSignal::AwaitUserInput)
+        })
 }
 
 fn load_output_schema(path: Option<PathBuf>) -> Option<Value> {

@@ -46,13 +46,7 @@ pub(crate) fn execute_mode_auto_continue_message(attempt: usize) -> String {
 
 pub(crate) fn non_stop_mode_auto_continue_message(attempt: usize) -> String {
     format!(
-        "Continue operating in Non-stop mode. This is non-stop auto-continuation #{attempt}. Do not stop for a status update, a completion guess, or an optional next step. Do not end the turn just because a subtask is complete. If you finish a subtask, immediately pick the next highest-leverage concrete task and keep going. Only end the turn if you are blocked on information only the user can provide and you include {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG}."
-    )
-}
-
-pub(crate) fn non_stop_mode_subtask_continue_message(attempt: usize) -> String {
-    format!(
-        "The last subtask is complete. This is non-stop subtask-continuation #{attempt}. Immediately choose and execute the next highest-leverage concrete task toward the user's goal. Do not stop just to report completion. Only end the turn if you are blocked on information only the user can provide and you include {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG}."
+        "Continue operating in Non-stop mode. This is non-stop auto-continuation #{attempt}. Do not stop for a status update, a completion guess, or an optional next step. If you finish a subtask, immediately search for the next concrete step and keep going. Only end the turn if you are blocked on information only the user can provide and you include {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG}, or if you have actively searched for the next step and there is truly nothing meaningful left to do, in which case end with {TASK_COMPLETE_OPEN_TAG}...{TASK_COMPLETE_CLOSE_TAG}."
     )
 }
 
@@ -87,7 +81,7 @@ pub(crate) fn non_stop_mode_stall_recovery_message(
 ) -> String {
     let repeated_status = trimmed_repeated_status(repeated_status);
     format!(
-        "Your last visible update repeated without concrete progress {stall_count} time(s): \"{repeated_status}\". Take a concrete next action now instead of another status update. If you just completed a subtask, immediately choose the next concrete task and continue. If a required external dependency is missing, end with {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG}."
+        "Your last visible update repeated without concrete progress {stall_count} time(s): \"{repeated_status}\". Take a concrete next action now instead of another status update. If you think the main implementation is already done, explicitly search for the next concrete step that would still advance the task. Only if that search comes up empty should you end with {TASK_COMPLETE_OPEN_TAG}...{TASK_COMPLETE_CLOSE_TAG}. If a required external dependency is missing, end with {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG}."
     )
 }
 

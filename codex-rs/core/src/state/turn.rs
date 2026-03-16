@@ -10,6 +10,7 @@ use tokio_util::task::AbortOnDropHandle;
 
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::protocol::TurnCompleteReason;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use tokio::sync::oneshot;
 
@@ -76,6 +77,7 @@ pub(crate) struct TurnState {
     pending_input: Vec<ResponseInputItem>,
     pub(crate) tool_calls: u64,
     pub(crate) token_usage_at_turn_start: TokenUsage,
+    pub(crate) completion_reason: TurnCompleteReason,
 }
 
 impl TurnState {

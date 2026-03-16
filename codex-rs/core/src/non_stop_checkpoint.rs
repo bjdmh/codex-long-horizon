@@ -1,18 +1,28 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::LazyLock;
+use std::sync::Mutex;
 
 use chrono::Utc;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::SessionSource;
 use serde::Deserialize;
 use serde::Serialize;
 use tracing::warn;
 
 use crate::codex::TurnContext;
+use crate::stream_events_utils::AWAIT_USER_INPUT_OPEN_TAG;
+use crate::stream_events_utils::TASK_COMPLETE_OPEN_TAG;
+use crate::stream_events_utils::raw_assistant_output_text_from_item;
 
 const NON_STOP_CHECKPOINTS_DIR: &str = "non-stop-checkpoints";
+static CHECKPOINT_CACHE: LazyLock<Mutex<HashMap<ThreadId, NonStopCheckpoint>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -23,6 +33,14 @@ pub enum NonStopCheckpointStatus {
     TurnAborted,
     Error,
     Shutdown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NonStopCheckpointControlSignal {
+    Continue,
+    AwaitUserInput,
+    TaskComplete,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,12 +56,31 @@ pub struct NonStopCheckpoint {
     pub updated_at: i64,
     pub goal_prompt: Option<String>,
     pub last_agent_message: Option<String>,
+    pub last_assistant_control_signal: Option<NonStopCheckpointControlSignal>,
 }
 
 pub fn checkpoint_path(codex_home: &Path, thread_id: ThreadId) -> PathBuf {
     codex_home
         .join(NON_STOP_CHECKPOINTS_DIR)
         .join(format!("{thread_id}.json"))
+}
+
+pub async fn read_non_stop_checkpoint(
+    codex_home: &Path,
+    thread_id: ThreadId,
+) -> Option<NonStopCheckpoint> {
+    if let Some(checkpoint) = cached_checkpoint(thread_id) {
+        return Some(checkpoint);
+    }
+    let checkpoint = read_checkpoint_from_disk(codex_home, thread_id).await?;
+    cache_checkpoint(checkpoint.clone());
+    Some(checkpoint)
+}
+
+async fn read_checkpoint_from_disk(codex_home: &Path, thread_id: ThreadId) -> Option<NonStopCheckpoint> {
+    let path = checkpoint_path(codex_home, thread_id);
+    let data = tokio::fs::read(&path).await.ok()?;
+    serde_json::from_slice(&data).ok()
 }
 
 pub(crate) async fn maybe_persist_checkpoint(
@@ -56,16 +93,27 @@ pub(crate) async fn maybe_persist_checkpoint(
         return;
     }
 
-    let (status, last_agent_message) = match checkpoint_fields_from_event(event) {
-        Some(fields) => fields,
-        None => return,
+    let existing = match event {
+        EventMsg::TurnStarted(_)
+        | EventMsg::RawResponseItem(_)
+        | EventMsg::AgentMessage(_)
+        | EventMsg::TurnComplete(_)
+        | EventMsg::TurnAborted(_)
+        | EventMsg::Error(_)
+        | EventMsg::ShutdownComplete => read_non_stop_checkpoint(codex_home, thread_id).await,
+        _ => return,
     };
-    let existing = read_checkpoint(codex_home, thread_id).await;
     let now = Utc::now().timestamp();
-    let checkpoint = NonStopCheckpoint {
+    let mut checkpoint = NonStopCheckpoint {
         thread_id,
-        turn_id: Some(turn_context.sub_id.clone()),
-        status,
+        turn_id: existing
+            .as_ref()
+            .and_then(|checkpoint| checkpoint.turn_id.clone()),
+        status: existing
+            .as_ref()
+            .map_or(NonStopCheckpointStatus::Pending, |checkpoint| {
+                checkpoint.status
+            }),
         collaboration_mode: turn_context.collaboration_mode.mode,
         model: turn_context.collaboration_mode.model().to_string(),
         cwd: turn_context.cwd.clone(),
@@ -74,11 +122,63 @@ pub(crate) async fn maybe_persist_checkpoint(
             .as_ref()
             .map_or(now, |checkpoint| checkpoint.created_at),
         updated_at: now,
-        goal_prompt: existing.and_then(|checkpoint| checkpoint.goal_prompt),
-        last_agent_message,
+        goal_prompt: existing
+            .as_ref()
+            .and_then(|checkpoint| checkpoint.goal_prompt.clone()),
+        last_agent_message: existing
+            .as_ref()
+            .and_then(|checkpoint| checkpoint.last_agent_message.clone()),
+        last_assistant_control_signal: existing
+            .as_ref()
+            .and_then(|checkpoint| checkpoint.last_assistant_control_signal),
     };
 
+    match event {
+        EventMsg::TurnStarted(_) => {
+            checkpoint.turn_id = Some(turn_context.sub_id.clone());
+            checkpoint.status = NonStopCheckpointStatus::Running;
+            checkpoint.last_agent_message = None;
+            checkpoint.last_assistant_control_signal = None;
+        }
+        EventMsg::RawResponseItem(RawResponseItemEvent { item }) => {
+            let Some(signal) = checkpoint_control_signal_from_item(item) else {
+                return;
+            };
+            checkpoint.turn_id = Some(turn_context.sub_id.clone());
+            checkpoint.status = NonStopCheckpointStatus::Running;
+            checkpoint.last_assistant_control_signal = Some(signal);
+        }
+        EventMsg::AgentMessage(event) => {
+            checkpoint.turn_id = Some(turn_context.sub_id.clone());
+            checkpoint.status = NonStopCheckpointStatus::Running;
+            checkpoint.last_agent_message = Some(event.message.clone());
+        }
+        EventMsg::TurnComplete(event) => {
+            checkpoint.turn_id = Some(turn_context.sub_id.clone());
+            checkpoint.status = NonStopCheckpointStatus::TurnComplete;
+            checkpoint.last_agent_message = event.last_agent_message.clone();
+        }
+        EventMsg::TurnAborted(event) => {
+            checkpoint.turn_id = Some(turn_context.sub_id.clone());
+            checkpoint.status = NonStopCheckpointStatus::TurnAborted;
+            if checkpoint.last_assistant_control_signal
+                != Some(NonStopCheckpointControlSignal::AwaitUserInput)
+            {
+                checkpoint.last_agent_message = Some(format!("{:?}", event.reason));
+            }
+        }
+        EventMsg::Error(event) => {
+            checkpoint.turn_id = Some(turn_context.sub_id.clone());
+            checkpoint.status = NonStopCheckpointStatus::Error;
+            checkpoint.last_agent_message = Some(event.message.clone());
+        }
+        EventMsg::ShutdownComplete => {
+            checkpoint.status = NonStopCheckpointStatus::Shutdown;
+        }
+        _ => return,
+    }
     write_checkpoint(codex_home, thread_id, &checkpoint).await;
+    cache_checkpoint(checkpoint);
 }
 
 pub async fn register_non_stop_session(
@@ -89,7 +189,7 @@ pub async fn register_non_stop_session(
     session_source: SessionSource,
     goal_prompt: Option<String>,
 ) {
-    let existing = read_checkpoint(codex_home, thread_id).await;
+    let existing = read_non_stop_checkpoint(codex_home, thread_id).await;
     let now = Utc::now().timestamp();
     let existing_turn_id = existing
         .as_ref()
@@ -105,7 +205,12 @@ pub async fn register_non_stop_session(
     let existing_goal_prompt = existing
         .as_ref()
         .and_then(|checkpoint| checkpoint.goal_prompt.clone());
-    let existing_last_agent_message = existing.and_then(|checkpoint| checkpoint.last_agent_message);
+    let existing_last_agent_message = existing
+        .as_ref()
+        .and_then(|checkpoint| checkpoint.last_agent_message.clone());
+    let existing_last_assistant_control_signal = existing
+        .as_ref()
+        .and_then(|checkpoint| checkpoint.last_assistant_control_signal);
     let checkpoint = NonStopCheckpoint {
         thread_id,
         turn_id: existing_turn_id,
@@ -118,15 +223,11 @@ pub async fn register_non_stop_session(
         updated_at: now,
         goal_prompt: goal_prompt.or(existing_goal_prompt),
         last_agent_message: existing_last_agent_message,
+        last_assistant_control_signal: existing_last_assistant_control_signal,
     };
 
     write_checkpoint(codex_home, thread_id, &checkpoint).await;
-}
-
-async fn read_checkpoint(codex_home: &Path, thread_id: ThreadId) -> Option<NonStopCheckpoint> {
-    let path = checkpoint_path(codex_home, thread_id);
-    let data = tokio::fs::read(&path).await.ok()?;
-    serde_json::from_slice(&data).ok()
+    cache_checkpoint(checkpoint);
 }
 
 async fn write_checkpoint(codex_home: &Path, thread_id: ThreadId, checkpoint: &NonStopCheckpoint) {
@@ -164,34 +265,39 @@ async fn write_checkpoint(codex_home: &Path, thread_id: ThreadId, checkpoint: &N
     }
 }
 
-fn checkpoint_fields_from_event(
-    event: &EventMsg,
-) -> Option<(NonStopCheckpointStatus, Option<String>)> {
-    match event {
-        EventMsg::TurnStarted(_) => Some((NonStopCheckpointStatus::Running, None)),
-        EventMsg::TurnComplete(event) => Some((
-            NonStopCheckpointStatus::TurnComplete,
-            event.last_agent_message.clone(),
-        )),
-        EventMsg::TurnAborted(event) => Some((
-            NonStopCheckpointStatus::TurnAborted,
-            Some(format!("{:?}", event.reason)),
-        )),
-        EventMsg::Error(event) => {
-            Some((NonStopCheckpointStatus::Error, Some(event.message.clone())))
-        }
-        EventMsg::ShutdownComplete => Some((NonStopCheckpointStatus::Shutdown, None)),
-        _ => None,
+fn cached_checkpoint(thread_id: ThreadId) -> Option<NonStopCheckpoint> {
+    CHECKPOINT_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&thread_id)
+        .cloned()
+}
+
+fn cache_checkpoint(checkpoint: NonStopCheckpoint) {
+    CHECKPOINT_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(checkpoint.thread_id, checkpoint);
+}
+
+fn checkpoint_control_signal_from_item(
+    item: &ResponseItem,
+) -> Option<NonStopCheckpointControlSignal> {
+    let text = raw_assistant_output_text_from_item(item)?;
+    if text.contains(AWAIT_USER_INPUT_OPEN_TAG) {
+        return Some(NonStopCheckpointControlSignal::AwaitUserInput);
     }
+    if text.contains(TASK_COMPLETE_OPEN_TAG) {
+        return Some(NonStopCheckpointControlSignal::TaskComplete);
+    }
+    Some(NonStopCheckpointControlSignal::Continue)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_protocol::protocol::TurnAbortReason;
-    use codex_protocol::protocol::TurnAbortedEvent;
-    use codex_protocol::protocol::TurnCompleteEvent;
-    use codex_protocol::protocol::TurnStartedEvent;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::protocol::RawResponseItemEvent;
     use tempfile::TempDir;
 
     #[test]
@@ -203,39 +309,52 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_fields_extracts_status_and_message() {
-        let complete = EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: "turn-1".to_string(),
-            last_agent_message: Some("done".to_string()),
+    fn checkpoint_control_signal_extracts_raw_assistant_tags() {
+        let blocked = EventMsg::RawResponseItem(RawResponseItemEvent {
+            item: ResponseItem::Message {
+                id: Some("msg-1".to_string()),
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "<await_user_input>I need credentials.</await_user_input>".to_string(),
+                }],
+                end_turn: Some(true),
+                phase: None,
+            },
         });
         assert_eq!(
-            checkpoint_fields_from_event(&complete),
-            Some((
-                NonStopCheckpointStatus::TurnComplete,
-                Some("done".to_string())
-            ))
+            checkpoint_control_signal_from_item(match blocked {
+                EventMsg::RawResponseItem(RawResponseItemEvent { ref item }) => item,
+                _ => unreachable!(),
+            }),
+            Some(NonStopCheckpointControlSignal::AwaitUserInput)
         );
 
-        let started = EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: "turn-1".to_string(),
-            model_context_window: None,
-            collaboration_mode_kind: ModeKind::NonStop,
-        });
+        let subtask_complete = ResponseItem::Message {
+            id: Some("msg-2".to_string()),
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "<task_complete>done</task_complete>".to_string(),
+            }],
+            end_turn: Some(true),
+            phase: None,
+        };
         assert_eq!(
-            checkpoint_fields_from_event(&started),
-            Some((NonStopCheckpointStatus::Running, None))
+            checkpoint_control_signal_from_item(&subtask_complete),
+            Some(NonStopCheckpointControlSignal::TaskComplete)
         );
 
-        let aborted = EventMsg::TurnAborted(TurnAbortedEvent {
-            turn_id: Some("turn-1".to_string()),
-            reason: TurnAbortReason::Interrupted,
-        });
+        let plain = ResponseItem::Message {
+            id: Some("msg-3".to_string()),
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "working".to_string(),
+            }],
+            end_turn: Some(true),
+            phase: None,
+        };
         assert_eq!(
-            checkpoint_fields_from_event(&aborted),
-            Some((
-                NonStopCheckpointStatus::TurnAborted,
-                Some("Interrupted".to_string())
-            ))
+            checkpoint_control_signal_from_item(&plain),
+            Some(NonStopCheckpointControlSignal::Continue)
         );
     }
 
@@ -262,5 +381,6 @@ mod tests {
         assert_eq!(checkpoint.status, NonStopCheckpointStatus::Pending);
         assert_eq!(checkpoint.goal_prompt.as_deref(), Some("ship the feature"));
         assert_eq!(checkpoint.turn_id, None);
+        assert_eq!(checkpoint.last_assistant_control_signal, None);
     }
 }

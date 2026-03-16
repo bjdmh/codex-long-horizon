@@ -4149,6 +4149,7 @@ mod tests {
                     msg: EventMsg::TurnComplete(TurnCompleteEvent {
                         turn_id: "turn-1".to_string(),
                         last_agent_message: None,
+                        completion_reason: codex_protocol::protocol::TurnCompleteReason::Completed,
                     }),
                 }],
                 input_state: Some(input_state),
@@ -4231,6 +4232,7 @@ mod tests {
                     msg: EventMsg::TurnComplete(TurnCompleteEvent {
                         turn_id: "turn-1".to_string(),
                         last_agent_message: None,
+                        completion_reason: codex_protocol::protocol::TurnCompleteReason::Completed,
                     }),
                 }],
                 input_state: Some(input_state),
@@ -4386,6 +4388,8 @@ mod tests {
                         msg: EventMsg::TurnComplete(TurnCompleteEvent {
                             turn_id: "turn-0".to_string(),
                             last_agent_message: None,
+                            completion_reason:
+                                codex_protocol::protocol::TurnCompleteReason::Completed,
                         }),
                     },
                     Event {
@@ -4416,6 +4420,7 @@ mod tests {
             msg: EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-1".to_string(),
                 last_agent_message: None,
+                completion_reason: codex_protocol::protocol::TurnCompleteReason::Completed,
             }),
         });
 

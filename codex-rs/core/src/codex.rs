@@ -50,7 +50,6 @@ use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::stream_events_utils::non_stop_mode_auto_continue_message;
 use crate::stream_events_utils::non_stop_mode_stall_recovery_message;
-use crate::stream_events_utils::non_stop_mode_subtask_continue_message;
 use crate::stream_events_utils::normalize_execute_progress_message;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
 use crate::stream_events_utils::record_completed_response_item;
@@ -101,6 +100,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::TurnCompleteReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
 use codex_protocol::protocol::TurnStartedEvent;
@@ -129,6 +129,7 @@ use tokio::sync::RwLock;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::debug;
@@ -2413,14 +2414,18 @@ impl Session {
             id: turn_context.sub_id.clone(),
             msg,
         };
-        non_stop_checkpoint::maybe_persist_checkpoint(
-            turn_context.config.codex_home.as_path(),
-            self.conversation_id,
-            turn_context,
-            &legacy_source,
-        )
-        .await;
-        self.send_event_raw(event).await;
+        if is_terminal_event(&legacy_source) {
+            self.send_event_raw_prioritized(event).await;
+        } else {
+            non_stop_checkpoint::maybe_persist_checkpoint(
+                turn_context.config.codex_home.as_path(),
+                self.conversation_id,
+                turn_context,
+                &legacy_source,
+            )
+            .await;
+            self.send_event_raw(event).await;
+        }
         self.maybe_mirror_event_text_to_realtime(&legacy_source)
             .await;
         self.maybe_clear_realtime_handoff_for_event(&legacy_source)
@@ -2467,6 +2472,28 @@ impl Session {
         self.persist_rollout_items(&rollout_items).await;
         if let Err(e) = self.tx_event.send(event).await {
             debug!("dropping event because channel is closed: {e}");
+        }
+    }
+
+    async fn send_event_raw_prioritized(&self, event: Event) {
+        if let Some(status) = agent_status_from_event(&event.msg) {
+            self.agent_status.send_replace(status);
+        }
+        if let Err(e) = self.tx_event.send(event.clone()).await {
+            debug!("dropping prioritized event because channel is closed: {e}");
+            return;
+        }
+        let recorder = {
+            let guard = self.services.rollout.lock().await;
+            guard.clone()
+        };
+        if let Some(recorder) = recorder {
+            let event_msg = event.msg.clone();
+            tokio::spawn(async move {
+                let _ = recorder
+                    .record_items(&[RolloutItem::EventMsg(event_msg)])
+                    .await;
+            });
         }
     }
 
@@ -3504,6 +3531,14 @@ impl Session {
                 ts.has_pending_input()
             }
             None => false,
+        }
+    }
+
+    pub(crate) async fn set_active_turn_completion_reason(&self, reason: TurnCompleteReason) {
+        let active = self.active_turn.lock().await;
+        if let Some(at) = active.as_ref() {
+            let mut ts = at.turn_state.lock().await;
+            ts.completion_reason = reason;
         }
     }
 
@@ -5164,10 +5199,23 @@ pub(crate) async fn run_turn(
         {
             Ok(sampling_request_output) => {
                 let SamplingRequestResult {
-                    needs_follow_up,
+                    mut needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
                     assistant_control_signal,
                 } = sampling_request_output;
+                if matches!(
+                    assistant_control_signal,
+                    AssistantControlSignal::AwaitUserInput | AssistantControlSignal::TaskComplete
+                ) {
+                    let completion_reason = match assistant_control_signal {
+                        AssistantControlSignal::Continue => TurnCompleteReason::Completed,
+                        AssistantControlSignal::AwaitUserInput => TurnCompleteReason::Blocked,
+                        AssistantControlSignal::TaskComplete => TurnCompleteReason::NoMoreWork,
+                    };
+                    sess.set_active_turn_completion_reason(completion_reason)
+                        .await;
+                    needs_follow_up = false;
+                }
                 let total_usage_tokens = sess.get_total_token_usage().await;
                 let token_limit_reached = total_usage_tokens >= auto_compact_limit;
 
@@ -5303,38 +5351,6 @@ pub(crate) async fn run_turn(
                                     }
                                 }
                             }
-                            AssistantControlSignal::TaskComplete
-                                if autonomous_mode == ModeKind::NonStop =>
-                            {
-                                execute_stall_count = 0;
-                                last_execute_progress_message = None;
-
-                                if execute_auto_continuation_count >= auto_continuation_limit {
-                                    sess.send_event(
-                                        &turn_context,
-                                        EventMsg::Warning(WarningEvent {
-                                            message: format!(
-                                                "Non-stop mode reached the auto-continuation limit ({auto_continuation_limit}); ending the turn after a completed subtask."
-                                            ),
-                                        }),
-                                    )
-                                    .await;
-                                } else if sess
-                                    .inject_response_items(vec![ResponseInputItem::Message {
-                                        role: "developer".to_string(),
-                                        content: vec![ContentItem::InputText {
-                                            text: non_stop_mode_subtask_continue_message(
-                                                execute_auto_continuation_count + 1,
-                                            ),
-                                        }],
-                                    }])
-                                    .await
-                                    .is_ok()
-                                {
-                                    execute_auto_continuation_count += 1;
-                                    continue;
-                                }
-                            }
                             AssistantControlSignal::AwaitUserInput
                             | AssistantControlSignal::TaskComplete => {}
                         }
@@ -5399,6 +5415,11 @@ pub(crate) async fn run_turn(
                         .await;
                         return None;
                     }
+                    warn!(
+                        turn_id = %turn_context.sub_id,
+                        ?assistant_control_signal,
+                        "run_turn: breaking after completed sampling cycle"
+                    );
                     break;
                 }
                 continue;
@@ -5433,6 +5454,10 @@ pub(crate) async fn run_turn(
         }
     }
 
+    warn!(
+        turn_id = %turn_context.sub_id,
+        "run_turn: returning last_agent_message"
+    );
     last_agent_message
 }
 
@@ -5918,6 +5943,7 @@ const EXECUTE_AUTO_CONTINUATION_LIMIT: usize = 16;
 const NON_STOP_AUTO_CONTINUATION_LIMIT: usize = 256;
 const EXECUTE_STALL_ESCALATION_THRESHOLD: usize = 1;
 const EXECUTE_STALL_LIMIT: usize = 4;
+const TERMINAL_SIGNAL_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 const fn autonomous_auto_continuation_limit(mode: ModeKind) -> usize {
     match mode {
@@ -6181,6 +6207,13 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::CollabResumeBegin(_)
         | EventMsg::CollabResumeEnd(_) => None,
     }
+}
+
+fn is_terminal_event(msg: &EventMsg) -> bool {
+    matches!(
+        msg,
+        EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_) | EventMsg::ShutdownComplete
+    )
 }
 
 /// Split the stream into normal assistant text vs. proposed plan content.
@@ -6513,6 +6546,7 @@ async fn try_run_sampling_request(
     let mut assistant_control_signal = AssistantControlSignal::Continue;
     let mut active_item: Option<TurnItem> = None;
     let mut should_emit_turn_diff = false;
+    let mut terminal_signal_deadline: Option<Instant> = None;
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
@@ -6526,12 +6560,39 @@ async fn try_run_sampling_request(
             from = field::Empty,
         );
 
-        let event = match stream
-            .next()
-            .instrument(trace_span!(parent: &handle_responses, "receiving"))
-            .or_cancel(&cancellation_token)
-            .await
-        {
+        let next_event = if let Some(deadline) = terminal_signal_deadline {
+            tokio::select! {
+                biased;
+                _ = tokio::time::sleep_until(deadline) => {
+                    warn!(turn_id = %turn_context.sub_id, ?assistant_control_signal, "terminal drain timeout fired");
+                    flush_assistant_text_segments_all(
+                        &sess,
+                        &turn_context,
+                        plan_mode_state.as_mut(),
+                        &mut assistant_message_stream_parsers,
+                    )
+                    .await;
+                    should_emit_turn_diff = true;
+                    break Ok(SamplingRequestResult {
+                        needs_follow_up: false,
+                        last_agent_message,
+                        assistant_control_signal,
+                    });
+                }
+                ev = stream
+                    .next()
+                    .instrument(trace_span!(parent: &handle_responses, "receiving"))
+                    .or_cancel(&cancellation_token) => ev,
+            }
+        } else {
+            stream
+                .next()
+                .instrument(trace_span!(parent: &handle_responses, "receiving"))
+                .or_cancel(&cancellation_token)
+                .await
+        };
+
+        let event = match next_event {
             Ok(event) => event,
             Err(codex_async_utils::CancelErr::Cancelled) => break Err(CodexErr::TurnAborted),
         };
@@ -6599,6 +6660,13 @@ async fn try_run_sampling_request(
                 }
                 assistant_control_signal = output_result.assistant_control_signal;
                 needs_follow_up |= output_result.needs_follow_up;
+                if matches!(
+                    assistant_control_signal,
+                    AssistantControlSignal::AwaitUserInput | AssistantControlSignal::TaskComplete
+                ) {
+                    warn!(turn_id = %turn_context.sub_id, ?assistant_control_signal, "setting terminal drain deadline");
+                    terminal_signal_deadline = Some(Instant::now() + TERMINAL_SIGNAL_DRAIN_TIMEOUT);
+                }
             }
             ResponseEvent::OutputItemAdded(item) => {
                 if let Some(turn_item) =
@@ -6678,6 +6746,7 @@ async fn try_run_sampling_request(
                 response_id: _,
                 token_usage,
             } => {
+                warn!(turn_id = %turn_context.sub_id, ?assistant_control_signal, "received response.completed");
                 flush_assistant_text_segments_all(
                     &sess,
                     &turn_context,
@@ -6689,7 +6758,13 @@ async fn try_run_sampling_request(
                     .await;
                 should_emit_turn_diff = true;
 
-                needs_follow_up |= sess.has_pending_input().await;
+                let should_check_pending_input = !matches!(
+                    assistant_control_signal,
+                    AssistantControlSignal::AwaitUserInput | AssistantControlSignal::TaskComplete
+                );
+                if should_check_pending_input {
+                    needs_follow_up |= sess.has_pending_input().await;
+                }
 
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
@@ -7820,6 +7895,7 @@ mod tests {
                 codex_protocol::protocol::TurnCompleteEvent {
                     turn_id,
                     last_agent_message: None,
+                    completion_reason: codex_protocol::protocol::TurnCompleteReason::Completed,
                 },
             )),
         ];
@@ -9909,6 +9985,7 @@ mod tests {
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id,
                 last_agent_message: None,
+                completion_reason: codex_protocol::protocol::TurnCompleteReason::Completed,
             }) if turn_id == tc.sub_id
         ));
     }

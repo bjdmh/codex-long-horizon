@@ -1529,10 +1529,27 @@ pub struct ModelRerouteEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ContextCompactedEvent;
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum TurnCompleteReason {
+    Completed,
+    Blocked,
+    NoMoreWork,
+}
+
+impl Default for TurnCompleteReason {
+    fn default() -> Self {
+        Self::Completed
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnCompleteEvent {
     pub turn_id: String,
     pub last_agent_message: Option<String>,
+    #[serde(default)]
+    pub completion_reason: TurnCompleteReason,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

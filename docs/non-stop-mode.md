@@ -20,11 +20,18 @@ introduced in layers.
 
 ## Design
 
+See also:
+
+- [Non-stop execution policy](./non-stop-execution-policy.md)
+
 ### Mode contract
 
 - `Execute`: end the turn when the task is complete or blocked.
-- `Non-stop`: treat task completion as a subtask boundary, not a stop signal.
-- `Non-stop` only stops automatically when required human input is missing.
+- `Non-stop`: keep searching for the next useful step instead of stopping at the
+  first local completion point.
+- `Non-stop` stops automatically only when required human input is missing, or
+  when the model has actively searched for the next step and found nothing
+  meaningful left to do.
 - Human `interrupt` / `shutdown` still stop it immediately.
 
 ### Phase 1: in-turn autonomous chaining
@@ -33,7 +40,7 @@ Phase 1 keeps the existing turn runtime and extends the collaboration contract:
 
 - add `non_stop` as a first-class collaboration mode
 - add dedicated built-in developer instructions
-- reuse `<task_complete>` as "subtask complete; choose the next task"
+- keep ordinary response completion as "search for the next task and continue"
 - keep `<await_user_input>` as the only model-driven stop condition
 - keep hard guardrails (continuation/stall limits) to avoid runaway loops
 
@@ -42,20 +49,42 @@ reintroducing the reverted loop scheduler.
 
 ### Phase 2: durable supervisor
 
-After Phase 1 is stable, add a persistent supervisor above turn execution:
+Phase 2 now adds a persistent supervisor above turn execution:
 
-- durable goal / backlog / checkpoint state
-- completion watcher that launches the next turn automatically
-- restart recovery from rollout + state DB
-- pause / sleep / retry scheduling that is policy-driven rather than prompt-only
+- durable goal + checkpoint state under `CODEX_HOME/non-stop-checkpoints`
+- completion watcher in `codex exec --non-stop` that launches the next turn
+  automatically after a completed turn
+- blocker-aware stop logic: if the latest raw assistant output ended with
+  `<await_user_input>`, the supervisor does not auto-resume
+- restart recovery: `codex exec resume --non-stop --last` can synthesize the
+  next supervisor prompt from the persisted goal prompt and the resumed thread
+  state
 
-The current groundwork now persists per-thread `Non-stop` checkpoints under:
+Each per-thread `Non-stop` checkpoint lives at:
 
 - `CODEX_HOME/non-stop-checkpoints/<thread_id>.json`
 
-When `codex exec --non-stop` starts a session, the checkpoint is also seeded
-with the current goal prompt so later supervisor work can resume from an
-explicit objective.
+These checkpoints persist:
+
+- the active goal prompt
+- the latest turn status
+- the latest visible assistant summary
+- the latest raw assistant control signal (`continue`, `task_complete`, or
+  `await_user_input`)
+
+That gives the supervisor enough durable state to resume from an explicit
+objective after process restarts, while still stopping automatically when human
+input is actually required.
+
+### Current stop policy
+
+`Non-stop` should now bias toward continuing useful optimization work. In
+practice:
+
+- an ordinary response completion should keep the turn moving
+- `<await_user_input>` remains the blocker stop signal
+- `<task_complete>` in `Non-stop` should be reserved for "I checked for the
+  next meaningful task and there is no worthwhile work left"
 
 ### Phase 3: constrained self-directed innovation
 
@@ -70,11 +99,11 @@ Autonomous innovation should be explicit and bounded:
 
 1. Add `Non-stop` mode to protocol, presets, docs, and UI mode lists.
 2. Make the core turn loop distinguish `Execute` from `Non-stop`.
-3. In `Non-stop`, continue automatically after `<task_complete>` with a
-   developer nudge to select the next concrete task.
-4. Keep `request_user_input` disabled in `Non-stop`.
-5. Add deterministic tests for subtask chaining and blocker stops.
-6. Only after this lands, start the durable supervisor work.
+3. In `Non-stop`, continue automatically after ordinary response completion.
+4. Reserve `<task_complete>` for "I searched for the next step and there is
+   nothing meaningful left to do."
+5. Keep `request_user_input` disabled in `Non-stop`.
+6. Add deterministic tests for continuation and blocker stops.
 
 ## Guardrails
 

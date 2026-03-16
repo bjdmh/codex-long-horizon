@@ -674,6 +674,7 @@ mod tests {
         let status = agent_status_from_event(&EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-1".to_string(),
             last_agent_message: Some("done".to_string()),
+            completion_reason: codex_protocol::protocol::TurnCompleteReason::Completed,
         }));
         let expected = AgentStatus::Completed(Some("done".to_string()));
         assert_eq!(status, Some(expected));

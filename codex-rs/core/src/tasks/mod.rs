@@ -28,6 +28,7 @@ use crate::protocol::EventMsg;
 use crate::protocol::TurnAbortReason;
 use crate::protocol::TurnAbortedEvent;
 use crate::protocol::TurnCompleteEvent;
+use crate::protocol::TurnCompleteReason;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
@@ -150,6 +151,7 @@ impl Session {
                 turn.id = %turn_context.sub_id,
                 model = %turn_context.model_info.slug,
             );
+            let task_kind_for_finish = task_for_run.kind();
             tokio::spawn(
                 async move {
                     let ctx_for_finish = Arc::clone(&ctx);
@@ -162,8 +164,12 @@ impl Session {
                         )
                         .await;
                     let sess = session_ctx.clone_session();
-                    sess.flush_rollout().await;
-                    if !task_cancellation_token.is_cancelled() {
+                    if task_kind_for_finish != TaskKind::Regular {
+                        sess.flush_rollout().await;
+                    }
+                    if !task_cancellation_token.is_cancelled()
+                        && task_kind_for_finish != TaskKind::Regular
+                    {
                         // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
                         sess.on_task_finished(Arc::clone(&ctx_for_finish), last_agent_message)
                             .await;
@@ -205,28 +211,34 @@ impl Session {
         turn_context: Arc<TurnContext>,
         last_agent_message: Option<String>,
     ) {
+        warn!(turn_id = %turn_context.sub_id, "on_task_finished: entered");
         turn_context
             .turn_metadata_state
             .cancel_git_enrichment_task();
 
         let mut active = self.active_turn.lock().await;
+        warn!(turn_id = %turn_context.sub_id, "on_task_finished: acquired active_turn lock");
         let mut pending_input = Vec::<ResponseInputItem>::new();
         let mut should_clear_active_turn = false;
         let mut token_usage_at_turn_start = None;
+        let mut completion_reason = TurnCompleteReason::Completed;
         let mut turn_tool_calls = 0_u64;
         if let Some(at) = active.as_mut()
             && at.remove_task(&turn_context.sub_id)
         {
             let mut ts = at.turn_state.lock().await;
+            warn!(turn_id = %turn_context.sub_id, "on_task_finished: acquired turn_state lock");
             pending_input = ts.take_pending_input();
             turn_tool_calls = ts.tool_calls;
             token_usage_at_turn_start = Some(ts.token_usage_at_turn_start.clone());
+            completion_reason = ts.completion_reason.clone();
             should_clear_active_turn = true;
         }
         if should_clear_active_turn {
             *active = None;
         }
         drop(active);
+        warn!(turn_id = %turn_context.sub_id, "on_task_finished: before send_event");
         if !pending_input.is_empty() {
             let pending_response_items = pending_input
                 .into_iter()
@@ -315,8 +327,10 @@ impl Session {
         let event = EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: turn_context.sub_id.clone(),
             last_agent_message,
+            completion_reason,
         });
         self.send_event(turn_context.as_ref(), event).await;
+        warn!(turn_id = %turn_context.sub_id, "on_task_finished: done");
     }
 
     async fn register_new_active_task(&self, task: RunningTask) {

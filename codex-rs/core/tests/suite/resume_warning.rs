@@ -65,6 +65,7 @@ fn resume_history(
             RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id,
                 last_agent_message: None,
+                completion_reason: codex_protocol::protocol::TurnCompleteReason::Completed,
             })),
         ],
         rollout_path: rollout_path.to_path_buf(),
