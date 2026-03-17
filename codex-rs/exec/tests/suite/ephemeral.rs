@@ -281,6 +281,57 @@ async fn non_stop_auto_starts_follow_up_turn_until_blocked() -> anyhow::Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_stop_rejects_unnecessary_await_user_input_and_keeps_running() -> anyhow::Result<()> {
+    let test = test_codex_exec();
+    let server = responses::start_mock_server().await;
+    let requests = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_assistant_message(
+                    "msg-1",
+                    "<await_user_input>I need to wait for CI to finish before checking again.</await_user_input>",
+                ),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-2"),
+                responses::ev_assistant_message(
+                    "msg-2",
+                    "<task_complete>Nothing meaningful remains after the wait.</task_complete>",
+                ),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.cmd_with_server(&server)
+        .arg("--skip-git-repo-check")
+        .arg("--non-stop")
+        .arg("keep going after rejecting pointless await")
+        .assert()
+        .code(0);
+
+    let all_requests = requests.requests();
+    assert_eq!(all_requests.len(), 2);
+    assert!(
+        all_requests[1]
+            .message_input_texts("developer")
+            .iter()
+            .any(
+                |text| text.contains("did not establish a clear user-only blocker")
+                    && text.contains("turn_sleep")
+            ),
+        "expected second request to include the invalid await_user_input correction, got: {:?}",
+        all_requests[1].body_json()
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn non_stop_task_complete_stops_cleanly_and_writes_last_message() -> anyhow::Result<()> {
     let test = test_codex_exec();
     let server = responses::start_mock_server().await;

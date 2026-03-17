@@ -32,6 +32,9 @@ use codex_exec::exec_events::Usage;
 use codex_exec::exec_events::WebSearchItem;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
+use codex_protocol::items::AgentMessageItem as CoreAgentMessageItem;
+use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::plan_tool::PlanItemArg;
@@ -55,6 +58,8 @@ use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
 use codex_protocol::protocol::ExecOutputStream;
 use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::ItemCompletedEvent as CoreItemCompletedEvent;
+use codex_protocol::protocol::ItemStartedEvent as CoreItemStartedEvent;
 use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
@@ -155,6 +160,62 @@ fn web_search_end_emits_item_completed() {
                     id: "call-123".to_string(),
                     query,
                     action,
+                }),
+            },
+        })]
+    );
+}
+
+#[test]
+fn turn_sleep_item_events_are_forwarded_to_exec_callers() {
+    let mut ep = EventProcessorWithJsonOutput::new(None);
+    let started = ep.collect_thread_events(&event(
+        "sleep-start",
+        EventMsg::ItemStarted(CoreItemStartedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            item: CoreTurnItem::AgentMessage(CoreAgentMessageItem {
+                id: "turn-sleep-call".to_string(),
+                content: vec![CoreAgentMessageContent::Text {
+                    text: "turn_sleep: waiting for 25 ms".to_string(),
+                }],
+                phase: None,
+            }),
+        }),
+    ));
+    let completed = ep.collect_thread_events(&event(
+        "sleep-end",
+        EventMsg::ItemCompleted(CoreItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            item: CoreTurnItem::AgentMessage(CoreAgentMessageItem {
+                id: "turn-sleep-call".to_string(),
+                content: vec![CoreAgentMessageContent::Text {
+                    text: "turn_sleep: finished waiting 25 ms".to_string(),
+                }],
+                phase: None,
+            }),
+        }),
+    ));
+
+    assert_eq!(
+        started,
+        vec![ThreadEvent::ItemStarted(ItemStartedEvent {
+            item: ThreadItem {
+                id: "turn-sleep-call".to_string(),
+                details: ThreadItemDetails::AgentMessage(AgentMessageItem {
+                    text: "turn_sleep: waiting for 25 ms".to_string(),
+                }),
+            },
+        })]
+    );
+    assert_eq!(
+        completed,
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+            item: ThreadItem {
+                id: "turn-sleep-call".to_string(),
+                details: ThreadItemDetails::AgentMessage(AgentMessageItem {
+                    text: "turn_sleep: finished waiting 25 ms".to_string(),
                 }),
             },
         })]

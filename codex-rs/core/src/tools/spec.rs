@@ -1028,6 +1028,31 @@ fn create_request_user_input_tool(
     })
 }
 
+fn create_sleep_tool() -> ToolSpec {
+    let properties = BTreeMap::from([(
+        "duration_ms".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "How long to sleep in milliseconds. Must be greater than zero and at most 600000 (10 minutes)."
+                    .to_string(),
+            ),
+        },
+    )]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "turn_sleep".to_string(),
+        description:
+            "Pause for a bounded amount of time when you clearly need to wait before the next action. Prefer this over `<await_user_input>` when the blocker is only time passing or an external process settling."
+                .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["duration_ms".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_close_agent_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -1751,6 +1776,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::SearchToolBm25Handler;
     use crate::tools::handlers::ShellCommandHandler;
     use crate::tools::handlers::ShellHandler;
+    use crate::tools::handlers::SleepHandler;
     use crate::tools::handlers::TestSyncHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
@@ -1771,6 +1797,7 @@ pub(crate) fn build_specs(
         default_mode_request_user_input: config.default_mode_request_user_input,
     });
     let search_tool_handler = Arc::new(SearchToolBm25Handler);
+    let sleep_handler = Arc::new(SleepHandler);
     let js_repl_handler = Arc::new(JsReplHandler);
     let js_repl_reset_handler = Arc::new(JsReplResetHandler);
     let artifacts_handler = Arc::new(ArtifactsHandler);
@@ -1825,6 +1852,8 @@ pub(crate) fn build_specs(
 
     builder.push_spec(PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);
+    builder.push_spec(create_sleep_tool());
+    builder.register_handler("turn_sleep", sleep_handler);
 
     if config.js_repl_enabled {
         builder.push_spec(create_js_repl_tool());
@@ -2196,6 +2225,7 @@ mod tests {
             create_exec_command_tool(true, false),
             create_write_stdin_tool(),
             PLAN_TOOL.clone(),
+            create_sleep_tool(),
             create_request_user_input_tool(CollaborationModesConfig::default()),
             create_apply_patch_freeform_tool(),
             ToolSpec::WebSearch {
@@ -2636,6 +2666,7 @@ mod tests {
             "shell_command",
             &[
                 "update_plan",
+                "turn_sleep",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2654,6 +2685,7 @@ mod tests {
             "shell_command",
             &[
                 "update_plan",
+                "turn_sleep",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2674,6 +2706,7 @@ mod tests {
                 "exec_command",
                 "write_stdin",
                 "update_plan",
+                "turn_sleep",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2694,6 +2727,7 @@ mod tests {
                 "exec_command",
                 "write_stdin",
                 "update_plan",
+                "turn_sleep",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2712,6 +2746,7 @@ mod tests {
             "shell_command",
             &[
                 "update_plan",
+                "turn_sleep",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2730,6 +2765,7 @@ mod tests {
             "shell_command",
             &[
                 "update_plan",
+                "turn_sleep",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2748,6 +2784,7 @@ mod tests {
             "shell",
             &[
                 "update_plan",
+                "turn_sleep",
                 "request_user_input",
                 "web_search",
                 "view_image",
@@ -2765,6 +2802,7 @@ mod tests {
             "shell_command",
             &[
                 "update_plan",
+                "turn_sleep",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2785,6 +2823,7 @@ mod tests {
                 "exec_command",
                 "write_stdin",
                 "update_plan",
+                "turn_sleep",
                 "request_user_input",
                 "apply_patch",
                 "web_search",

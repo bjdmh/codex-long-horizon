@@ -49,7 +49,7 @@ pub(crate) fn request_user_input_unavailable_message(
 pub(crate) fn request_user_input_tool_description(default_mode_request_user_input: bool) -> String {
     let allowed_modes = format_allowed_modes(default_mode_request_user_input);
     format!(
-        "Request user input for one to three short questions and wait for the response. This tool is only available in {allowed_modes}."
+        "Request user input for one to three short questions and wait for the response. Use this only when the next step truly requires information or a decision that only the user can provide. If you are only waiting on time or an external process, use `turn_sleep` instead. This tool is only available in {allowed_modes}."
     )
 }
 
@@ -169,11 +169,11 @@ mod tests {
     fn request_user_input_tool_description_mentions_available_modes() {
         assert_eq!(
             request_user_input_tool_description(false),
-            "Request user input for one to three short questions and wait for the response. This tool is only available in Plan mode.".to_string()
+            "Request user input for one to three short questions and wait for the response. Use this only when the next step truly requires information or a decision that only the user can provide. If you are only waiting on time or an external process, use `turn_sleep` instead. This tool is only available in Plan mode.".to_string()
         );
         assert_eq!(
             request_user_input_tool_description(true),
-            "Request user input for one to three short questions and wait for the response. This tool is only available in Default or Plan mode.".to_string()
+            "Request user input for one to three short questions and wait for the response. Use this only when the next step truly requires information or a decision that only the user can provide. If you are only waiting on time or an external process, use `turn_sleep` instead. This tool is only available in Default or Plan mode.".to_string()
         );
     }
 }

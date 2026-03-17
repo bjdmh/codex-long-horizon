@@ -115,6 +115,7 @@ use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ImageGenerationBeginEvent;
 use codex_protocol::protocol::ImageGenerationEndEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::ListCustomPromptsResponseEvent;
 use codex_protocol::protocol::ListSkillsResponseEvent;
 use codex_protocol::protocol::McpListToolsResponseEvent;
@@ -578,6 +579,7 @@ pub(crate) struct ChatWidget {
     last_copyable_output: Option<String>,
     pending_standalone_user_shell_submission: bool,
     standalone_user_shell_turn_running: bool,
+    pending_manual_compact_completion: bool,
     running_commands: HashMap<String, RunningCommand>,
     suppressed_exec_calls: HashSet<String>,
     skills_all: Vec<ProtocolSkillMetadata>,
@@ -1568,6 +1570,7 @@ impl ChatWidget {
         self.pending_status_indicator_restore = false;
         self.agent_turn_running = false;
         self.standalone_user_shell_turn_running = false;
+        self.pending_manual_compact_completion = false;
         self.pending_standalone_user_shell_submission = false;
         self.turn_sleep_inhibitor.set_turn_running(false);
         self.update_task_running_state();
@@ -1856,6 +1859,7 @@ impl ChatWidget {
         self.stream_controller = None;
         self.plan_stream_controller = None;
         self.pending_status_indicator_restore = false;
+        self.pending_manual_compact_completion = false;
         self.request_status_line_branch_refresh();
         self.maybe_show_pending_rate_limit_prompt();
     }
@@ -2593,6 +2597,17 @@ impl ChatWidget {
         self.maybe_restore_status_indicator_after_stream_idle();
     }
 
+    fn turn_sleep_message(item: &AgentMessageItem) -> Option<String> {
+        let message = item
+            .content
+            .iter()
+            .map(|content| match content {
+                AgentMessageContent::Text { text } => text.as_str(),
+            })
+            .collect::<String>();
+        message.starts_with("turn_sleep:").then_some(message)
+    }
+
     /// Periodic tick for stream commits. In smooth mode this preserves one-line pacing, while
     /// catch-up mode drains larger batches to reduce queue lag.
     pub(crate) fn on_commit_tick(&mut self) {
@@ -3135,6 +3150,7 @@ impl ChatWidget {
             last_copyable_output: None,
             pending_standalone_user_shell_submission: false,
             standalone_user_shell_turn_running: false,
+            pending_manual_compact_completion: false,
             running_commands: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
@@ -3319,6 +3335,7 @@ impl ChatWidget {
             last_copyable_output: None,
             pending_standalone_user_shell_submission: false,
             standalone_user_shell_turn_running: false,
+            pending_manual_compact_completion: false,
             running_commands: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
@@ -3495,6 +3512,7 @@ impl ChatWidget {
             last_copyable_output: None,
             pending_standalone_user_shell_submission: false,
             standalone_user_shell_turn_running: false,
+            pending_manual_compact_completion: false,
             running_commands: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
@@ -3857,6 +3875,7 @@ impl ChatWidget {
             }
             SlashCommand::Compact => {
                 self.clear_token_usage();
+                self.pending_manual_compact_completion = true;
                 self.app_event_tx.send(AppEvent::CodexOp(Op::Compact));
             }
             SlashCommand::Review => {
@@ -4884,7 +4903,12 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request, from_replay)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
-            EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
+            EventMsg::ContextCompacted(_) => {
+                self.on_agent_message("Context compacted".to_owned());
+                if self.pending_manual_compact_completion && !from_replay {
+                    self.on_task_complete(None, false);
+                }
+            }
             EventMsg::CollabAgentSpawnBegin(_) => {}
             EventMsg::CollabAgentSpawnEnd(ev) => self.on_collab_event(multi_agents::spawn_end(ev)),
             EventMsg::CollabAgentInteractionBegin(_) => {}
@@ -4908,6 +4932,14 @@ impl ChatWidget {
                     self.app_event_tx.send(AppEvent::ApplyThreadRollback {
                         num_turns: rollback.num_turns,
                     });
+                }
+            }
+            EventMsg::ItemStarted(ItemStartedEvent {
+                item: TurnItem::AgentMessage(item),
+                ..
+            }) if Self::turn_sleep_message(&item).is_some() => {
+                if let Some(message) = Self::turn_sleep_message(&item) {
+                    self.on_warning(message);
                 }
             }
             EventMsg::RawResponseItem(_)

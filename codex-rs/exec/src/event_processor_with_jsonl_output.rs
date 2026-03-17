@@ -121,6 +121,14 @@ impl EventProcessorWithJsonOutput {
             protocol::EventMsg::SessionConfigured(ev) => self.handle_session_configured(ev),
             protocol::EventMsg::ThreadNameUpdated(_) => Vec::new(),
             protocol::EventMsg::AgentMessage(ev) => self.handle_agent_message(ev),
+            protocol::EventMsg::ItemStarted(protocol::ItemStartedEvent {
+                item: codex_protocol::items::TurnItem::AgentMessage(item),
+                ..
+            }) if is_turn_sleep_message(item) => self.handle_turn_sleep_item_started(item),
+            protocol::EventMsg::ItemCompleted(protocol::ItemCompletedEvent {
+                item: codex_protocol::items::TurnItem::AgentMessage(item),
+                ..
+            }) if is_turn_sleep_message(item) => self.handle_turn_sleep_item_completed(item),
             protocol::EventMsg::ItemCompleted(protocol::ItemCompletedEvent {
                 item: codex_protocol::items::TurnItem::Plan(item),
                 ..
@@ -279,6 +287,50 @@ impl EventProcessorWithJsonOutput {
         };
 
         vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })]
+    }
+
+    fn handle_turn_sleep_item_started(
+        &self,
+        item: &codex_protocol::items::AgentMessageItem,
+    ) -> Vec<ThreadEvent> {
+        vec![ThreadEvent::ItemStarted(ItemStartedEvent {
+            item: ThreadItem {
+                id: item.id.clone(),
+                details: ThreadItemDetails::AgentMessage(AgentMessageItem {
+                    text: item
+                        .content
+                        .iter()
+                        .map(|entry| match entry {
+                            codex_protocol::items::AgentMessageContent::Text { text } => {
+                                text.clone()
+                            }
+                        })
+                        .collect::<String>(),
+                }),
+            },
+        })]
+    }
+
+    fn handle_turn_sleep_item_completed(
+        &self,
+        item: &codex_protocol::items::AgentMessageItem,
+    ) -> Vec<ThreadEvent> {
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+            item: ThreadItem {
+                id: item.id.clone(),
+                details: ThreadItemDetails::AgentMessage(AgentMessageItem {
+                    text: item
+                        .content
+                        .iter()
+                        .map(|entry| match entry {
+                            codex_protocol::items::AgentMessageContent::Text { text } => {
+                                text.clone()
+                            }
+                        })
+                        .collect::<String>(),
+                }),
+            },
+        })]
     }
     fn handle_exec_command_begin(
         &mut self,
@@ -795,6 +847,14 @@ impl EventProcessorWithJsonOutput {
 
         items
     }
+}
+
+fn is_turn_sleep_message(item: &codex_protocol::items::AgentMessageItem) -> bool {
+    item.content.iter().any(|entry| match entry {
+        codex_protocol::items::AgentMessageContent::Text { text } => {
+            text.starts_with("turn_sleep:")
+        }
+    })
 }
 
 fn is_collab_failure(status: &CoreAgentStatus) -> bool {

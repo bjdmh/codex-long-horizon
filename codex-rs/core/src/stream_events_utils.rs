@@ -46,7 +46,7 @@ pub(crate) fn execute_mode_auto_continue_message(attempt: usize) -> String {
 
 pub(crate) fn non_stop_mode_auto_continue_message(attempt: usize) -> String {
     format!(
-        "Continue operating in Non-stop mode. This is non-stop auto-continuation #{attempt}. Do not stop for a status update, a completion guess, or an optional next step. If you finish a subtask, immediately search for the next concrete step and keep going. Only end the turn if you are blocked on information only the user can provide and you include {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG}, or if you have actively searched for the next step and there is truly nothing meaningful left to do, in which case end with {TASK_COMPLETE_OPEN_TAG}...{TASK_COMPLETE_CLOSE_TAG}."
+        "Continue operating in Non-stop mode. This is non-stop auto-continuation #{attempt}. Do not stop for a status update, a completion guess, or an optional next step. If you finish a subtask, immediately search for the next concrete step and keep going. Use {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG} only when the next action truly requires information, credentials, approval, or a decision that only the user can provide. If you merely need time to pass or an external process to settle, use the `turn_sleep` tool instead. Only end the turn if you are blocked on information only the user can provide and you include {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG}, or if you have actively searched for the next step and there is truly nothing meaningful left to do, in which case end with {TASK_COMPLETE_OPEN_TAG}...{TASK_COMPLETE_CLOSE_TAG}."
     )
 }
 
@@ -81,8 +81,96 @@ pub(crate) fn non_stop_mode_stall_recovery_message(
 ) -> String {
     let repeated_status = trimmed_repeated_status(repeated_status);
     format!(
-        "Your last visible update repeated without concrete progress {stall_count} time(s): \"{repeated_status}\". Take a concrete next action now instead of another status update. If you think the main implementation is already done, explicitly search for the next concrete step that would still advance the task. Only if that search comes up empty should you end with {TASK_COMPLETE_OPEN_TAG}...{TASK_COMPLETE_CLOSE_TAG}. If a required external dependency is missing, end with {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG}."
+        "Your last visible update repeated without concrete progress {stall_count} time(s): \"{repeated_status}\". Take a concrete next action now instead of another status update. If you think the main implementation is already done, explicitly search for the next concrete step that would still advance the task. Only if that search comes up empty should you end with {TASK_COMPLETE_OPEN_TAG}...{TASK_COMPLETE_CLOSE_TAG}. Use {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG} only for real user-only blockers; if you are simply waiting, use the `turn_sleep` tool."
     )
+}
+
+pub(crate) fn non_stop_mode_invalid_await_user_input_message() -> String {
+    format!(
+        "Your previous {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG} did not establish a clear user-only blocker. Continue autonomously instead. Only use {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG} when the very next step truly requires user-provided information, credentials, approval, or a decision that cannot be inferred. If you are just waiting for time to pass or an external process to settle, call the `turn_sleep` tool instead."
+    )
+}
+
+pub(crate) fn non_stop_await_user_input_is_justified(text: Option<&str>) -> bool {
+    let Some(text) = text.map(str::trim).filter(|text| !text.is_empty()) else {
+        return false;
+    };
+    let normalized = text.to_ascii_lowercase();
+    let has_user_only_blocker = [
+        "credential",
+        "credentials",
+        "api key",
+        "token",
+        "secret",
+        "password",
+        "login",
+        "sign in",
+        "2fa",
+        "approval",
+        "permission",
+        "consent",
+        "confirm",
+        "confirmation",
+        "choose",
+        "decision",
+        "preference",
+        "clarify",
+        "clarification",
+        "provide",
+        "tell me",
+        "which",
+        "account",
+        "access",
+        "授权",
+        "批准",
+        "审批",
+        "确认",
+        "选择",
+        "决定",
+        "澄清",
+        "提供",
+        "凭证",
+        "密钥",
+        "令牌",
+        "密码",
+        "账号",
+        "访问",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle));
+    if !has_user_only_blocker {
+        return false;
+    }
+
+    let only_waiting = [
+        "wait",
+        "waiting",
+        "retry later",
+        "poll",
+        "polling",
+        "settle",
+        "cooldown",
+        "ci",
+        "build",
+        "deploy",
+        "deployment",
+        "job",
+        "startup",
+        "starting up",
+        "come back later",
+        "稍后",
+        "等待",
+        "轮询",
+        "重试",
+        "构建",
+        "部署",
+        "任务",
+        "启动",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle));
+
+    !only_waiting
 }
 
 pub(crate) fn normalize_execute_progress_message(text: &str) -> Option<String> {
@@ -425,6 +513,7 @@ mod tests {
     use super::execute_mode_stall_recovery_message;
     use super::handle_non_tool_response_item;
     use super::last_assistant_message_from_item;
+    use super::non_stop_await_user_input_is_justified;
     use super::normalize_execute_progress_message;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::items::TurnItem;
@@ -549,5 +638,18 @@ mod tests {
         assert!(message.contains("Still working on it."));
         assert!(message.contains(TASK_COMPLETE_OPEN_TAG));
         assert!(message.contains(AWAIT_USER_INPUT_OPEN_TAG));
+    }
+
+    #[test]
+    fn non_stop_await_user_input_requires_clear_user_only_blocker() {
+        assert!(non_stop_await_user_input_is_justified(Some(
+            "I need production credentials before I can continue."
+        )));
+        assert!(!non_stop_await_user_input_is_justified(Some(
+            "I need to wait for CI to finish."
+        )));
+        assert!(!non_stop_await_user_input_is_justified(Some(
+            "Waiting for the deployment job to settle before checking again."
+        )));
     }
 }

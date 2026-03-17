@@ -1,0 +1,8 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: combined
+---
+⚠ turn_sleep: waiting for 25 ms
+
+
+• turn_sleep: finished waiting 25 ms

@@ -31,10 +31,22 @@ const TASK_COMPLETE_CLOSE_TAG: &str = "</task_complete>";
 const AWAIT_USER_INPUT_OPEN_TAG: &str = "<await_user_input>";
 const AUTO_CONTINUE_PREFIX: &str = "Continue executing the current task autonomously.";
 const STALL_RECOVERY_PREFIX: &str = "Your last visible update repeated without concrete progress";
+const NON_STOP_INVALID_AWAIT_PREFIX: &str = "Your previous <await_user_input>...</await_user_input> did not establish a clear user-only blocker.";
 
 fn execute_mode(model: String) -> CollaborationMode {
     CollaborationMode {
         mode: ModeKind::Execute,
+        settings: Settings {
+            model,
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    }
+}
+
+fn non_stop_mode(model: String) -> CollaborationMode {
+    CollaborationMode {
+        mode: ModeKind::NonStop,
         settings: Settings {
             model,
             reasoning_effort: None,
@@ -87,6 +99,11 @@ async fn submit_turn(
 async fn submit_execute_turn(test: &TestCodex, prompt: &str) -> Result<TurnCompleteEvent> {
     let session_model = test.session_configured.model.clone();
     submit_turn(test, prompt, execute_mode(session_model)).await
+}
+
+async fn submit_non_stop_turn(test: &TestCodex, prompt: &str) -> Result<TurnCompleteEvent> {
+    let session_model = test.session_configured.model.clone();
+    submit_turn(test, prompt, non_stop_mode(session_model)).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -462,6 +479,113 @@ async fn execute_mode_injects_stall_recovery_after_repeated_status_update() -> R
             .iter()
             .any(|text| text.contains(STALL_RECOVERY_PREFIX)),
         "repeated status update should trigger a stall recovery developer message"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_stop_rejects_unnecessary_await_user_input_and_continues() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let test = test_codex().build(&server).await?;
+
+    let requests = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message(
+                    "msg-1",
+                    &format!(
+                        "{AWAIT_USER_INPUT_OPEN_TAG}I need to wait for CI to finish before checking again.</await_user_input>"
+                    ),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message(
+                    "msg-2",
+                    &format!(
+                        "{TASK_COMPLETE_OPEN_TAG}completed after the waiting period{TASK_COMPLETE_CLOSE_TAG}"
+                    ),
+                ),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let completed = submit_non_stop_turn(&test, "keep going without pointless blocking").await?;
+
+    assert_eq!(
+        completed.last_agent_message.as_deref(),
+        Some("completed after the waiting period")
+    );
+
+    let all_requests = requests.requests();
+    assert_eq!(all_requests.len(), 2);
+    assert!(
+        all_requests[1]
+            .message_input_texts("developer")
+            .iter()
+            .any(|text| text.contains(NON_STOP_INVALID_AWAIT_PREFIX) && text.contains("turn_sleep")),
+        "second request should include the non-stop invalid await_user_input correction"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_sleep_tool_waits_and_returns_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let test = test_codex().build(&server).await?;
+
+    let call_id = "turn-sleep-call";
+    let requests = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    call_id,
+                    "turn_sleep",
+                    &json!({ "duration_ms": 1 }).to_string(),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message(
+                    "msg-2",
+                    &format!(
+                        "{TASK_COMPLETE_OPEN_TAG}finished after sleeping{TASK_COMPLETE_CLOSE_TAG}"
+                    ),
+                ),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let completed = submit_non_stop_turn(&test, "wait briefly, then finish").await?;
+
+    assert_eq!(
+        completed.last_agent_message.as_deref(),
+        Some("finished after sleeping")
+    );
+
+    let all_requests = requests.requests();
+    assert_eq!(all_requests.len(), 2);
+    assert_eq!(
+        all_requests[1]
+            .function_call_output_text(call_id)
+            .as_deref(),
+        Some("slept for 1 ms")
     );
 
     Ok(())

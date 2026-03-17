@@ -19,7 +19,6 @@ use codex_core::AuthManager;
 use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_core::NewThread;
 use codex_core::NonStopCheckpoint;
-use codex_core::NonStopCheckpointControlSignal;
 use codex_core::NonStopCheckpointStatus;
 use codex_core::OLLAMA_OSS_PROVIDER_ID;
 use codex_core::ThreadManager;
@@ -803,15 +802,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             None
         };
         let shutdown = event_processor.process_event(event);
-        if !shutdown_requested
-            && thread_id == primary_thread_id
-            && config.initial_collaboration_mode == ModeKind::NonStop
-            && non_stop_blocker_requests_shutdown(&config, primary_thread_id).await
-        {
-            thread.submit(Op::Shutdown).await?;
-            shutdown_requested = true;
-            continue;
-        }
         if thread_id != primary_thread_id && matches!(shutdown, CodexStatus::InitiateShutdown) {
             continue;
         }
@@ -1001,10 +991,7 @@ async fn maybe_submit_non_stop_follow_up_turn(
     else {
         return Ok(false);
     };
-    if checkpoint.status != NonStopCheckpointStatus::TurnComplete
-        || checkpoint.last_assistant_control_signal
-            == Some(NonStopCheckpointControlSignal::AwaitUserInput)
-    {
+    if checkpoint.status != NonStopCheckpointStatus::TurnComplete {
         return Ok(false);
     }
 
@@ -1030,19 +1017,6 @@ async fn maybe_submit_non_stop_follow_up_turn(
     exec_span.record("turn.id", task_id.as_str());
     info!("Started non-stop follow-up turn with event ID: {task_id}");
     Ok(true)
-}
-
-async fn non_stop_blocker_requests_shutdown(
-    config: &Config,
-    thread_id: codex_protocol::ThreadId,
-) -> bool {
-    read_non_stop_checkpoint(config.codex_home.as_path(), thread_id)
-        .await
-        .is_some_and(|checkpoint| {
-            checkpoint.status == NonStopCheckpointStatus::Running
-                && checkpoint.last_assistant_control_signal
-                    == Some(NonStopCheckpointControlSignal::AwaitUserInput)
-        })
 }
 
 fn load_output_schema(path: Option<PathBuf>) -> Option<Value> {

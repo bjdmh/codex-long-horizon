@@ -167,8 +167,13 @@ impl Session {
                     if task_kind_for_finish != TaskKind::Regular {
                         sess.flush_rollout().await;
                     }
+                    let still_active = sess
+                        .turn_context_for_sub_id(&ctx_for_finish.sub_id)
+                        .await
+                        .is_some();
                     if !task_cancellation_token.is_cancelled()
                         && task_kind_for_finish != TaskKind::Regular
+                        && still_active
                     {
                         // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
                         sess.on_task_finished(Arc::clone(&ctx_for_finish), last_agent_message)

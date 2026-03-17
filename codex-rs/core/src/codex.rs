@@ -5,6 +5,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::time::Duration;
 
 use crate::AuthManager;
 use crate::CodexAuth;
@@ -48,7 +49,9 @@ use crate::stream_events_utils::execute_mode_stall_recovery_message;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
+use crate::stream_events_utils::non_stop_await_user_input_is_justified;
 use crate::stream_events_utils::non_stop_mode_auto_continue_message;
+use crate::stream_events_utils::non_stop_mode_invalid_await_user_input_message;
 use crate::stream_events_utils::non_stop_mode_stall_recovery_message;
 use crate::stream_events_utils::normalize_execute_progress_message;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
@@ -337,6 +340,7 @@ pub struct CodexSpawnOk {
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
+const TERMINAL_EVENT_FLUSH_TIMEOUT: Duration = Duration::from_secs(1);
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
@@ -2494,7 +2498,16 @@ impl Session {
         }
         self.persist_rollout_items(&[RolloutItem::EventMsg(event.msg.clone())])
             .await;
-        self.flush_rollout().await;
+        if tokio::time::timeout(TERMINAL_EVENT_FLUSH_TIMEOUT, self.flush_rollout())
+            .await
+            .is_err()
+        {
+            warn!(
+                event_id = %event.id,
+                ?event.msg,
+                "timed out waiting for terminal event rollout flush; delivering event anyway"
+            );
+        }
         if let Err(e) = self.tx_event.send(event).await {
             debug!("dropping event because channel is closed: {e}");
         }
@@ -5183,11 +5196,30 @@ pub(crate) async fn run_turn(
         .await
         {
             Ok(sampling_request_output) => {
+                let autonomous_mode = turn_context.collaboration_mode.mode;
+                let mut invalid_non_stop_await_user_input = false;
                 let SamplingRequestResult {
                     mut needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
-                    assistant_control_signal,
+                    mut assistant_control_signal,
                 } = sampling_request_output;
+                if autonomous_mode == ModeKind::NonStop
+                    && assistant_control_signal == AssistantControlSignal::AwaitUserInput
+                    && !non_stop_await_user_input_is_justified(
+                        sampling_request_last_agent_message.as_deref(),
+                    )
+                {
+                    sess.send_event(
+                        &turn_context,
+                        EventMsg::Warning(WarningEvent {
+                            message: "Non-stop mode rejected an unnecessary <await_user_input> and will continue autonomously."
+                                .to_string(),
+                        }),
+                    )
+                    .await;
+                    invalid_non_stop_await_user_input = true;
+                    assistant_control_signal = AssistantControlSignal::Continue;
+                }
                 if matches!(
                     assistant_control_signal,
                     AssistantControlSignal::AwaitUserInput | AssistantControlSignal::TaskComplete
@@ -5238,13 +5270,16 @@ pub(crate) async fn run_turn(
                 }
 
                 if !needs_follow_up {
-                    let autonomous_mode = turn_context.collaboration_mode.mode;
                     if autonomous_mode.is_autonomous() {
                         let mode_name = autonomous_mode.display_name();
                         let auto_continuation_limit =
                             autonomous_auto_continuation_limit(autonomous_mode);
                         match assistant_control_signal {
                             AssistantControlSignal::Continue => {
+                                if invalid_non_stop_await_user_input {
+                                    execute_stall_count = 0;
+                                    last_execute_progress_message = None;
+                                }
                                 let current_progress_message = sampling_request_last_agent_message
                                     .as_deref()
                                     .and_then(normalize_execute_progress_message);
@@ -5280,7 +5315,9 @@ pub(crate) async fn run_turn(
                                     )
                                     .await;
                                 } else {
-                                    let developer_message = if execute_stall_count
+                                    let developer_message = if invalid_non_stop_await_user_input {
+                                        non_stop_mode_invalid_await_user_input_message()
+                                    } else if execute_stall_count
                                         >= EXECUTE_STALL_ESCALATION_THRESHOLD
                                     {
                                         match autonomous_mode {

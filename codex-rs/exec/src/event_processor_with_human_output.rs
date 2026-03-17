@@ -22,6 +22,7 @@ use codex_protocol::protocol::ExecCommandBeginEvent;
 use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
@@ -349,6 +350,42 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     self,
                     "{}\n{}",
                     "codex".style(self.italic).style(self.magenta),
+                    message,
+                );
+            }
+            EventMsg::ItemStarted(ItemStartedEvent {
+                item: TurnItem::AgentMessage(item),
+                ..
+            }) if is_turn_sleep_message(&item) => {
+                let message = item
+                    .content
+                    .iter()
+                    .map(|entry| match entry {
+                        codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
+                    })
+                    .collect::<String>();
+                ts_msg!(
+                    self,
+                    "{}\n{}",
+                    "turn_sleep".style(self.italic).style(self.magenta),
+                    message,
+                );
+            }
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::AgentMessage(item),
+                ..
+            }) if is_turn_sleep_message(&item) => {
+                let message = item
+                    .content
+                    .iter()
+                    .map(|entry| match entry {
+                        codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
+                    })
+                    .collect::<String>();
+                ts_msg!(
+                    self,
+                    "{}\n{}",
+                    "turn_sleep".style(self.italic).style(self.magenta),
                     message,
                 );
             }
@@ -904,6 +941,14 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             }
         }
     }
+}
+
+fn is_turn_sleep_message(item: &codex_protocol::items::AgentMessageItem) -> bool {
+    item.content.iter().any(|entry| match entry {
+        codex_protocol::items::AgentMessageContent::Text { text } => {
+            text.starts_with("turn_sleep:")
+        }
+    })
 }
 
 impl EventProcessorWithHumanOutput {

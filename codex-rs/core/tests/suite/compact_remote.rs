@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::Result;
 use codex_core::CodexAuth;
@@ -1040,6 +1041,75 @@ async fn remote_manual_compact_failure_emits_task_error_event() -> Result<()> {
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     assert_eq!(compact_mock.requests().len(), 1);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_manual_compact_interrupt_aborts_hung_request() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    mount_sse_once(
+        harness.server(),
+        sse(vec![
+            responses::ev_assistant_message("m1", "REMOTE_REPLY"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let compact_mock = responses::mount_compact_response_once(
+        harness.server(),
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "application/json")
+            .set_body_json(serde_json::json!({ "output": [] }))
+            .set_delay(Duration::from_secs(30)),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "manual remote compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await?;
+    wait_for_event(&codex, |event| {
+        matches!(
+            event,
+            EventMsg::ItemStarted(ItemStartedEvent {
+                item: TurnItem::ContextCompaction(_),
+                ..
+            })
+        )
+    })
+    .await;
+
+    codex.submit(Op::Interrupt).await?;
+    let aborted = wait_for_event_match(&codex, |event| match event {
+        EventMsg::TurnAborted(ev) => Some(ev.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(
+        aborted.reason,
+        codex_protocol::protocol::TurnAbortReason::Interrupted
+    );
+    assert!(
+        compact_mock.requests().len() <= 1,
+        "interrupt may win before the remote compact HTTP request is sent"
+    );
 
     Ok(())
 }

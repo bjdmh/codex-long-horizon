@@ -43,6 +43,7 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Settings;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
+use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
@@ -74,6 +75,7 @@ use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ImageGenerationEndEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::McpStartupCompleteEvent;
 use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpStartupUpdateEvent;
@@ -1854,6 +1856,7 @@ async fn make_chatwidget_manual(
         last_copyable_output: None,
         pending_standalone_user_shell_submission: false,
         standalone_user_shell_turn_running: false,
+        pending_manual_compact_completion: false,
         running_commands: HashMap::new(),
         suppressed_exec_calls: HashSet::new(),
         skills_all: Vec::new(),
@@ -4634,6 +4637,124 @@ async fn standalone_bang_command_exec_end_clears_working_state_without_turn_comp
 }
 
 #[tokio::test]
+async fn remote_compact_turn_complete_clears_working_state() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Compact);
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::CodexOp(Op::Compact))),
+        "expected /compact to enqueue Op::Compact; events: {events:?}"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "turn-compact".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-compact".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    assert!(chat.bottom_pane.is_task_running());
+
+    let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem {
+        id: "compact-1".to_string(),
+    });
+
+    chat.handle_codex_event(Event {
+        id: "turn-compact".into(),
+        msg: EventMsg::ItemStarted(ItemStartedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-compact".to_string(),
+            item: compaction_item.clone(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "turn-compact".into(),
+        msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-compact".to_string(),
+            item: compaction_item,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "turn-compact".into(),
+        msg: EventMsg::ContextCompacted(codex_protocol::protocol::ContextCompactedEvent {}),
+    });
+    chat.handle_codex_event(Event {
+        id: "turn-compact".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-compact".to_string(),
+            last_agent_message: None,
+            completion_reason: codex_protocol::protocol::TurnCompleteReason::Completed,
+        }),
+    });
+
+    assert!(!chat.agent_turn_running);
+    assert!(!chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.status_widget().is_none());
+    assert!(!chat.turn_sleep_inhibitor.is_turn_running());
+}
+
+#[tokio::test]
+async fn remote_compact_context_compacted_clears_working_state_without_turn_complete() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Compact);
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::CodexOp(Op::Compact))),
+        "expected /compact to enqueue Op::Compact; events: {events:?}"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "turn-compact".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-compact".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    assert!(chat.bottom_pane.is_task_running());
+
+    let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem {
+        id: "compact-1".to_string(),
+    });
+
+    chat.handle_codex_event(Event {
+        id: "turn-compact".into(),
+        msg: EventMsg::ItemStarted(ItemStartedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-compact".to_string(),
+            item: compaction_item.clone(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "turn-compact".into(),
+        msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-compact".to_string(),
+            item: compaction_item,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "turn-compact".into(),
+        msg: EventMsg::ContextCompacted(codex_protocol::protocol::ContextCompactedEvent {}),
+    });
+
+    assert!(!chat.agent_turn_running);
+    assert!(!chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.status_widget().is_none());
+    assert!(!chat.turn_sleep_inhibitor.is_turn_running());
+}
+
+#[tokio::test]
 async fn exec_history_cell_shows_working_then_completed() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
@@ -6207,6 +6328,50 @@ async fn view_image_tool_call_adds_history_cell() {
     assert_eq!(cells.len(), 1, "expected a single history cell");
     let combined = lines_to_single_string(&cells[0]);
     assert_snapshot!("local_image_attachment_history_snapshot", combined);
+}
+
+#[tokio::test]
+async fn turn_sleep_progress_items_add_history_cells() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let started = TurnItem::AgentMessage(AgentMessageItem {
+        id: "turn-sleep-call".into(),
+        content: vec![AgentMessageContent::Text {
+            text: "turn_sleep: waiting for 25 ms".into(),
+        }],
+        phase: None,
+    });
+    let completed = TurnItem::AgentMessage(AgentMessageItem {
+        id: "turn-sleep-call".into(),
+        content: vec![AgentMessageContent::Text {
+            text: "turn_sleep: finished waiting 25 ms".into(),
+        }],
+        phase: None,
+    });
+
+    chat.handle_codex_event(Event {
+        id: "turn-sleep-start".into(),
+        msg: EventMsg::ItemStarted(codex_protocol::protocol::ItemStartedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-sleep-turn".into(),
+            item: started,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "turn-sleep-end".into(),
+        msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-sleep-turn".into(),
+            item: completed,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_snapshot!("turn_sleep_history_snapshot", combined);
 }
 
 #[tokio::test]
