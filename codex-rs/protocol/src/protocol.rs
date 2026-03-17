@@ -1977,27 +1977,58 @@ impl InitialHistory {
     }
 
     pub fn get_event_msgs(&self) -> Option<Vec<EventMsg>> {
+        fn normalized_rollout_event_msgs(items: &[RolloutItem]) -> Vec<EventMsg> {
+            let mut events = Vec::new();
+            let mut current_turn_id: Option<String> = None;
+            let mut last_agent_message: Option<String> = None;
+
+            for item in items {
+                let Some(mut event) = (match item {
+                    RolloutItem::EventMsg(ev) => Some(ev.clone()),
+                    _ => None,
+                }) else {
+                    continue;
+                };
+
+                match &mut event {
+                    EventMsg::TurnStarted(started) => {
+                        current_turn_id = Some(started.turn_id.clone());
+                        last_agent_message = None;
+                    }
+                    EventMsg::AgentMessage(agent_message) => {
+                        if !agent_message.message.trim().is_empty() {
+                            last_agent_message = Some(agent_message.message.clone());
+                        }
+                    }
+                    EventMsg::TurnComplete(completed) => {
+                        let turn_matches = current_turn_id
+                            .as_deref()
+                            .is_none_or(|turn_id| turn_id == completed.turn_id);
+                        if completed.last_agent_message.is_none() && turn_matches {
+                            completed.last_agent_message = last_agent_message.clone();
+                        }
+                        current_turn_id = None;
+                        last_agent_message = None;
+                    }
+                    EventMsg::TurnAborted(_) => {
+                        current_turn_id = None;
+                        last_agent_message = None;
+                    }
+                    _ => {}
+                }
+
+                events.push(event);
+            }
+
+            events
+        }
+
         match self {
             InitialHistory::New => None,
-            InitialHistory::Resumed(resumed) => Some(
-                resumed
-                    .history
-                    .iter()
-                    .filter_map(|ri| match ri {
-                        RolloutItem::EventMsg(ev) => Some(ev.clone()),
-                        _ => None,
-                    })
-                    .collect(),
-            ),
-            InitialHistory::Forked(items) => Some(
-                items
-                    .iter()
-                    .filter_map(|ri| match ri {
-                        RolloutItem::EventMsg(ev) => Some(ev.clone()),
-                        _ => None,
-                    })
-                    .collect(),
-            ),
+            InitialHistory::Resumed(resumed) => {
+                Some(normalized_rollout_event_msgs(&resumed.history))
+            }
+            InitialHistory::Forked(items) => Some(normalized_rollout_event_msgs(items)),
         }
     }
 

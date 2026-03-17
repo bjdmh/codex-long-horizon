@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/model_visible_layout.rs
+assertion_line: 372
 expression: "format_labeled_requests_snapshot(\"First post-resume turn where resumed config model differs from rollout and personality changes.\",\n&[(\"Last Request Before Resume\", &initial_request),\n(\"First Request After Resume\", &resumed_request),])"
 ---
 Scenario: First post-resume turn where resumed config model differs from rollout and personality changes.
@@ -7,7 +8,7 @@ Scenario: First post-resume turn where resumed config model differs from rollout
 ## Last Request Before Resume
 00:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] <collaboration_mode># Collaboration Mode: Default\n\nYou are now in Default mode. Any previous i...
+    [02] <collaboration_mode># Collaboration Style: Execute\nYou execute on a well-specified task indepen...
 01:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
@@ -16,15 +17,16 @@ Scenario: First post-resume turn where resumed config model differs from rollout
 ## First Request After Resume
 00:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] <collaboration_mode># Collaboration Mode: Default\n\nYou are now in Default mode. Any previous i...
+    [02] <collaboration_mode># Collaboration Style: Execute\nYou execute on a well-specified task indepen...
 01:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:seed resume history
 03:message/assistant:recorded before resume
-04:message/developer[3]:
+04:message/developer:Continue executing the current task autonomously. This is execute-mode auto-continuation #1. Do ...
+05:message/developer[3]:
     [01] <model_switch>\nThe user was previously using a different model. Please continue the conversatio...
     [02] <PERMISSIONS_INSTRUCTIONS>
-    [03] <collaboration_mode># Collaboration Mode: Default\n\nYou are now in Default mode. Any previous i...
-05:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
-06:message/user:resume and change personality
+    [03] <collaboration_mode># Collaboration Style: Execute\nYou execute on a well-specified task indepen...
+06:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
+07:message/user:resume and change personality

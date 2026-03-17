@@ -1,5 +1,6 @@
 use anyhow::Context;
 use codex_core::features::Feature;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandEndEvent;
@@ -23,6 +24,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_event_with_timeout;
+use pretty_assertions::assert_eq;
 use regex_lite::escape;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -92,6 +94,83 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
         stdout = stdout.replace("\r\n", "\n");
     }
     assert_eq!(stdout, contents);
+}
+
+#[tokio::test]
+async fn standalone_user_shell_command_emits_turn_complete() {
+    let server = start_mock_server().await;
+    let fixture = test_codex()
+        .build(&server)
+        .await
+        .expect("create new conversation");
+    let codex = &fixture.codex;
+
+    codex
+        .submit(Op::RunUserShellCommand {
+            command: "echo done".to_string(),
+        })
+        .await
+        .expect("submit bang command");
+
+    let end_event = wait_for_event_match(codex, |ev| match ev {
+        EventMsg::ExecCommandEnd(event) if event.source == ExecCommandSource::UserShell => {
+            Some(event.clone())
+        }
+        _ => None,
+    })
+    .await;
+    assert_eq!(end_event.exit_code, 0);
+
+    let completed = wait_for_event_with_timeout(
+        codex,
+        |ev| matches!(ev, EventMsg::TurnComplete(_)),
+        Duration::from_secs(10),
+    )
+    .await;
+    assert!(
+        matches!(completed, EventMsg::TurnComplete(_)),
+        "expected standalone user shell command to complete its turn"
+    );
+}
+
+#[tokio::test]
+async fn standalone_user_shell_command_emits_turn_complete_in_non_stop_mode() {
+    let server = start_mock_server().await;
+    let fixture = test_codex()
+        .with_config(|config| {
+            config.initial_collaboration_mode = ModeKind::NonStop;
+        })
+        .build(&server)
+        .await
+        .expect("create new conversation");
+    let codex = &fixture.codex;
+
+    codex
+        .submit(Op::RunUserShellCommand {
+            command: "echo done".to_string(),
+        })
+        .await
+        .expect("submit bang command");
+
+    let end_event = wait_for_event_match(codex, |ev| match ev {
+        EventMsg::ExecCommandEnd(event) if event.source == ExecCommandSource::UserShell => {
+            Some(event.clone())
+        }
+        _ => None,
+    })
+    .await;
+    assert_eq!(end_event.exit_code, 0);
+
+    let completed = wait_for_event_with_timeout(
+        codex,
+        |ev| matches!(ev, EventMsg::TurnComplete(_)),
+        Duration::from_secs(10),
+    )
+    .await;
+    assert!(
+        matches!(completed, EventMsg::TurnComplete(_)),
+        "expected standalone non-stop user shell command to complete its turn"
+    );
 }
 
 #[tokio::test]

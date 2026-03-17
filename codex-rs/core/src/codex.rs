@@ -2414,16 +2414,23 @@ impl Session {
             id: turn_context.sub_id.clone(),
             msg,
         };
-        non_stop_checkpoint::maybe_persist_checkpoint(
-            turn_context.config.codex_home.as_path(),
-            self.conversation_id,
-            turn_context,
-            &legacy_source,
-        )
-        .await;
         if is_terminal_event(&legacy_source) {
-            self.send_event_raw_prioritized(event).await;
+            non_stop_checkpoint::maybe_persist_checkpoint(
+                turn_context.config.codex_home.as_path(),
+                self.conversation_id,
+                turn_context,
+                &legacy_source,
+            )
+            .await;
+            self.send_event_raw_flushed(event).await;
         } else {
+            non_stop_checkpoint::maybe_persist_checkpoint(
+                turn_context.config.codex_home.as_path(),
+                self.conversation_id,
+                turn_context,
+                &legacy_source,
+            )
+            .await;
             self.send_event_raw(event).await;
         }
         self.maybe_mirror_event_text_to_realtime(&legacy_source)
@@ -2472,28 +2479,6 @@ impl Session {
         self.persist_rollout_items(&rollout_items).await;
         if let Err(e) = self.tx_event.send(event).await {
             debug!("dropping event because channel is closed: {e}");
-        }
-    }
-
-    async fn send_event_raw_prioritized(&self, event: Event) {
-        if let Some(status) = agent_status_from_event(&event.msg) {
-            self.agent_status.send_replace(status);
-        }
-        if let Err(e) = self.tx_event.send(event.clone()).await {
-            debug!("dropping prioritized event because channel is closed: {e}");
-            return;
-        }
-        let recorder = {
-            let guard = self.services.rollout.lock().await;
-            guard.clone()
-        };
-        if let Some(recorder) = recorder {
-            let event_msg = event.msg.clone();
-            tokio::spawn(async move {
-                let _ = recorder
-                    .record_items(&[RolloutItem::EventMsg(event_msg)])
-                    .await;
-            });
         }
     }
 

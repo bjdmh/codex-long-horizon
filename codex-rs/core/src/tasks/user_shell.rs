@@ -77,14 +77,20 @@ impl SessionTask for UserShellCommandTask {
         _input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
+        let sess = session.clone_session();
+        let turn_context_for_finish = Arc::clone(&turn_context);
+        let completion_token = cancellation_token.clone();
         execute_user_shell_command(
-            session.clone_session(),
+            sess.clone(),
             turn_context,
             self.command.clone(),
             cancellation_token,
             UserShellCommandMode::StandaloneTurn,
         )
         .await;
+        if !completion_token.is_cancelled() {
+            sess.on_task_finished(turn_context_for_finish, None).await;
+        }
         None
     }
 }

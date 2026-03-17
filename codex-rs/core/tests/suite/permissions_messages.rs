@@ -1,6 +1,7 @@
 use anyhow::Result;
 use codex_core::config::Constrained;
 use codex_execpolicy::Policy;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -56,6 +57,7 @@ async fn permissions_message_sent_once_on_start() -> Result<()> {
 
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.initial_collaboration_mode = ModeKind::Default;
     });
     let test = builder.build(&server).await?;
 
@@ -97,6 +99,7 @@ async fn permissions_message_added_on_override_change() -> Result<()> {
 
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.initial_collaboration_mode = ModeKind::Default;
     });
     let test = builder.build(&server).await?;
 
@@ -170,6 +173,7 @@ async fn permissions_message_not_added_when_no_change() -> Result<()> {
 
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.initial_collaboration_mode = ModeKind::Default;
     });
     let test = builder.build(&server).await?;
 
@@ -232,6 +236,7 @@ async fn resume_replays_permissions_messages() -> Result<()> {
 
     let mut builder = test_codex().with_config(|config| {
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.initial_collaboration_mode = ModeKind::Default;
     });
     let initial = builder.build(&server).await?;
     let rollout_path = initial
@@ -332,6 +337,7 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
 
     let mut builder = test_codex().with_config(|config| {
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.initial_collaboration_mode = ModeKind::Default;
     });
     let initial = builder.build(&server).await?;
     let rollout_path = initial
@@ -388,6 +394,7 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
 
     builder = builder.with_config(|config| {
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::UnlessTrusted);
+        config.initial_collaboration_mode = ModeKind::Default;
     });
     let resumed = builder.resume(&server, home, rollout_path.clone()).await?;
     resumed

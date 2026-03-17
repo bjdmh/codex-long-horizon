@@ -576,6 +576,8 @@ pub(crate) struct ChatWidget {
     plan_stream_controller: Option<PlanStreamController>,
     // Latest completed user-visible Codex output that `/copy` should place on the clipboard.
     last_copyable_output: Option<String>,
+    pending_standalone_user_shell_submission: bool,
+    standalone_user_shell_turn_running: bool,
     running_commands: HashMap<String, RunningCommand>,
     suppressed_exec_calls: HashSet<String>,
     skills_all: Vec<ProtocolSkillMetadata>,
@@ -769,6 +771,7 @@ pub(crate) struct ThreadInputState {
     current_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
     agent_turn_running: bool,
+    standalone_user_shell_turn_running: bool,
 }
 
 impl From<String> for UserMessage {
@@ -1499,6 +1502,8 @@ impl ChatWidget {
 
     fn on_task_started(&mut self) {
         self.agent_turn_running = true;
+        self.standalone_user_shell_turn_running = self.pending_standalone_user_shell_submission;
+        self.pending_standalone_user_shell_submission = false;
         self.turn_sleep_inhibitor.set_turn_running(true);
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
@@ -1562,6 +1567,8 @@ impl ChatWidget {
         // Mark task stopped and request redraw now that all content is in history.
         self.pending_status_indicator_restore = false;
         self.agent_turn_running = false;
+        self.standalone_user_shell_turn_running = false;
+        self.pending_standalone_user_shell_submission = false;
         self.turn_sleep_inhibitor.set_turn_running(false);
         self.update_task_running_state();
         self.running_commands.clear();
@@ -2083,6 +2090,7 @@ impl ChatWidget {
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
             agent_turn_running: self.agent_turn_running,
+            standalone_user_shell_turn_running: self.standalone_user_shell_turn_running,
         })
     }
 
@@ -2091,6 +2099,9 @@ impl ChatWidget {
             self.current_collaboration_mode = input_state.current_collaboration_mode;
             self.active_collaboration_mask = input_state.active_collaboration_mask;
             self.agent_turn_running = input_state.agent_turn_running;
+            self.standalone_user_shell_turn_running =
+                input_state.standalone_user_shell_turn_running;
+            self.pending_standalone_user_shell_submission = false;
             self.update_collaboration_mode_indicator();
             self.refresh_model_display();
             if let Some(composer) = input_state.composer {
@@ -2124,6 +2135,8 @@ impl ChatWidget {
                 .extend(input_state.queued_user_messages);
         } else {
             self.agent_turn_running = false;
+            self.standalone_user_shell_turn_running = false;
+            self.pending_standalone_user_shell_submission = false;
             self.pending_steers.clear();
             self.set_remote_image_urls(Vec::new());
             self.bottom_pane.set_composer_text_with_mention_bindings(
@@ -2327,6 +2340,23 @@ impl ChatWidget {
         }
         let ev2 = ev.clone();
         self.defer_or_handle(|q| q.push_exec_end(ev), |s| s.handle_exec_end_now(ev2));
+    }
+
+    fn maybe_finish_standalone_user_shell_turn(&mut self, source: ExecCommandSource) {
+        if source != ExecCommandSource::UserShell || !self.standalone_user_shell_turn_running {
+            return;
+        }
+        self.standalone_user_shell_turn_running = false;
+        self.pending_standalone_user_shell_submission = false;
+        if !self.agent_turn_running {
+            return;
+        }
+        self.pending_status_indicator_restore = false;
+        self.agent_turn_running = false;
+        self.turn_sleep_inhibitor.set_turn_running(false);
+        self.update_task_running_state();
+        self.refresh_pending_input_preview();
+        self.request_redraw();
     }
 
     fn track_unified_exec_process_begin(&mut self, ev: &ExecCommandBeginEvent) {
@@ -2811,6 +2841,7 @@ impl ChatWidget {
         }
         // Mark that actual work was done (command executed)
         self.had_work_activity = true;
+        self.maybe_finish_standalone_user_shell_turn(source);
     }
 
     pub(crate) fn handle_patch_apply_end_now(
@@ -3102,6 +3133,8 @@ impl ChatWidget {
             stream_controller: None,
             plan_stream_controller: None,
             last_copyable_output: None,
+            pending_standalone_user_shell_submission: false,
+            standalone_user_shell_turn_running: false,
             running_commands: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
@@ -3284,6 +3317,8 @@ impl ChatWidget {
             stream_controller: None,
             plan_stream_controller: None,
             last_copyable_output: None,
+            pending_standalone_user_shell_submission: false,
+            standalone_user_shell_turn_running: false,
             running_commands: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
@@ -3458,6 +3493,8 @@ impl ChatWidget {
             stream_controller: None,
             plan_stream_controller: None,
             last_copyable_output: None,
+            pending_standalone_user_shell_submission: false,
+            standalone_user_shell_turn_running: false,
             running_commands: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
@@ -4366,6 +4403,7 @@ impl ChatWidget {
                 )));
                 return;
             }
+            self.pending_standalone_user_shell_submission = !self.bottom_pane.is_task_running();
             self.submit_op(Op::RunUserShellCommand {
                 command: cmd.to_string(),
             });

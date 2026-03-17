@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/model_visible_layout.rs
+assertion_line: 471
 expression: "format_labeled_requests_snapshot(\"First post-resume turn where pre-turn override sets model to rollout model; no model-switch update should appear.\",\n&[(\"Last Request Before Resume\", &initial_request),\n(\"First Request After Resume + Override\", &resumed_request),])"
 ---
 Scenario: First post-resume turn where pre-turn override sets model to rollout model; no model-switch update should appear.
@@ -7,7 +8,7 @@ Scenario: First post-resume turn where pre-turn override sets model to rollout m
 ## Last Request Before Resume
 00:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] <collaboration_mode># Collaboration Mode: Default\n\nYou are now in Default mode. Any previous i...
+    [02] <collaboration_mode># Collaboration Style: Execute\nYou execute on a well-specified task indepen...
 01:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
@@ -16,11 +17,12 @@ Scenario: First post-resume turn where pre-turn override sets model to rollout m
 ## First Request After Resume + Override
 00:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] <collaboration_mode># Collaboration Mode: Default\n\nYou are now in Default mode. Any previous i...
+    [02] <collaboration_mode># Collaboration Style: Execute\nYou execute on a well-specified task indepen...
 01:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:seed resume history
 03:message/assistant:recorded before resume
-04:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
-05:message/user:first resumed turn after model override
+04:message/developer:Continue executing the current task autonomously. This is execute-mode auto-continuation #1. Do ...
+05:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
+06:message/user:first resumed turn after model override

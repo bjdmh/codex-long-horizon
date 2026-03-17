@@ -59,6 +59,15 @@ pub struct NonStopCheckpoint {
     pub last_assistant_control_signal: Option<NonStopCheckpointControlSignal>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct NonStopCheckpointContext {
+    pub turn_id: String,
+    pub collaboration_mode: ModeKind,
+    pub model: String,
+    pub cwd: PathBuf,
+    pub session_source: SessionSource,
+}
+
 pub fn checkpoint_path(codex_home: &Path, thread_id: ThreadId) -> PathBuf {
     codex_home
         .join(NON_STOP_CHECKPOINTS_DIR)
@@ -77,6 +86,18 @@ pub async fn read_non_stop_checkpoint(
     Some(checkpoint)
 }
 
+impl NonStopCheckpointContext {
+    pub(crate) fn from_turn_context(turn_context: &TurnContext) -> Self {
+        Self {
+            turn_id: turn_context.sub_id.clone(),
+            collaboration_mode: turn_context.collaboration_mode.mode,
+            model: turn_context.collaboration_mode.model().to_string(),
+            cwd: turn_context.cwd.clone(),
+            session_source: turn_context.session_source.clone(),
+        }
+    }
+}
+
 async fn read_checkpoint_from_disk(
     codex_home: &Path,
     thread_id: ThreadId,
@@ -92,7 +113,17 @@ pub(crate) async fn maybe_persist_checkpoint(
     turn_context: &TurnContext,
     event: &EventMsg,
 ) {
-    if turn_context.collaboration_mode.mode != ModeKind::NonStop {
+    let context = NonStopCheckpointContext::from_turn_context(turn_context);
+    maybe_persist_checkpoint_with_context(codex_home, thread_id, &context, event).await;
+}
+
+pub(crate) async fn maybe_persist_checkpoint_with_context(
+    codex_home: &Path,
+    thread_id: ThreadId,
+    turn_context: &NonStopCheckpointContext,
+    event: &EventMsg,
+) {
+    if turn_context.collaboration_mode != ModeKind::NonStop {
         return;
     }
 
@@ -117,8 +148,8 @@ pub(crate) async fn maybe_persist_checkpoint(
             .map_or(NonStopCheckpointStatus::Pending, |checkpoint| {
                 checkpoint.status
             }),
-        collaboration_mode: turn_context.collaboration_mode.mode,
-        model: turn_context.collaboration_mode.model().to_string(),
+        collaboration_mode: turn_context.collaboration_mode,
+        model: turn_context.model.clone(),
         cwd: turn_context.cwd.clone(),
         session_source: turn_context.session_source.clone(),
         created_at: existing
@@ -138,7 +169,7 @@ pub(crate) async fn maybe_persist_checkpoint(
 
     match event {
         EventMsg::TurnStarted(_) => {
-            checkpoint.turn_id = Some(turn_context.sub_id.clone());
+            checkpoint.turn_id = Some(turn_context.turn_id.clone());
             checkpoint.status = NonStopCheckpointStatus::Running;
             checkpoint.last_agent_message = None;
             checkpoint.last_assistant_control_signal = None;
@@ -147,22 +178,22 @@ pub(crate) async fn maybe_persist_checkpoint(
             let Some(signal) = checkpoint_control_signal_from_item(item) else {
                 return;
             };
-            checkpoint.turn_id = Some(turn_context.sub_id.clone());
+            checkpoint.turn_id = Some(turn_context.turn_id.clone());
             checkpoint.status = NonStopCheckpointStatus::Running;
             checkpoint.last_assistant_control_signal = Some(signal);
         }
         EventMsg::AgentMessage(event) => {
-            checkpoint.turn_id = Some(turn_context.sub_id.clone());
+            checkpoint.turn_id = Some(turn_context.turn_id.clone());
             checkpoint.status = NonStopCheckpointStatus::Running;
             checkpoint.last_agent_message = Some(event.message.clone());
         }
         EventMsg::TurnComplete(event) => {
-            checkpoint.turn_id = Some(turn_context.sub_id.clone());
+            checkpoint.turn_id = Some(turn_context.turn_id.clone());
             checkpoint.status = NonStopCheckpointStatus::TurnComplete;
             checkpoint.last_agent_message = event.last_agent_message.clone();
         }
         EventMsg::TurnAborted(event) => {
-            checkpoint.turn_id = Some(turn_context.sub_id.clone());
+            checkpoint.turn_id = Some(turn_context.turn_id.clone());
             checkpoint.status = NonStopCheckpointStatus::TurnAborted;
             if checkpoint.last_assistant_control_signal
                 != Some(NonStopCheckpointControlSignal::AwaitUserInput)
@@ -171,7 +202,7 @@ pub(crate) async fn maybe_persist_checkpoint(
             }
         }
         EventMsg::Error(event) => {
-            checkpoint.turn_id = Some(turn_context.sub_id.clone());
+            checkpoint.turn_id = Some(turn_context.turn_id.clone());
             checkpoint.status = NonStopCheckpointStatus::Error;
             checkpoint.last_agent_message = Some(event.message.clone());
         }

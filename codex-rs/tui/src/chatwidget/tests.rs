@@ -1852,6 +1852,8 @@ async fn make_chatwidget_manual(
         stream_controller: None,
         plan_stream_controller: None,
         last_copyable_output: None,
+        pending_standalone_user_shell_submission: false,
+        standalone_user_shell_turn_running: false,
         running_commands: HashMap::new(),
         suppressed_exec_calls: HashSet::new(),
         skills_all: Vec::new(),
@@ -1924,6 +1926,21 @@ fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
             Ok(_) => continue,
             Err(TryRecvError::Empty) => panic!("expected a submit op but queue was empty"),
             Err(TryRecvError::Disconnected) => panic!("expected submit op but channel closed"),
+        }
+    }
+}
+
+fn next_user_shell_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> String {
+    loop {
+        match op_rx.try_recv() {
+            Ok(Op::RunUserShellCommand { command }) => return command,
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => {
+                panic!("expected a user shell command op but queue was empty")
+            }
+            Err(TryRecvError::Disconnected) => {
+                panic!("expected user shell command op but channel closed")
+            }
         }
     }
 }
@@ -3594,6 +3611,7 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
         agent_turn_running: true,
+        standalone_user_shell_turn_running: false,
     }));
 
     assert!(chat.agent_turn_running);
@@ -4541,6 +4559,78 @@ async fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
 
     let images = chat.bottom_pane.take_recent_submission_images();
     assert_eq!(vec![PathBuf::from("/tmp/preview.png")], images);
+}
+
+#[tokio::test]
+async fn standalone_bang_command_exec_end_clears_working_state_without_turn_complete() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.bottom_pane
+        .set_composer_text("!echo done".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(next_user_shell_op(&mut op_rx), "echo done");
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    assert!(chat.bottom_pane.is_task_running());
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let command = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "echo done".to_string(),
+    ];
+    let parsed_cmd = codex_shell_command::parse_command::parse_command(&command);
+
+    chat.handle_codex_event(Event {
+        id: "call-1".into(),
+        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: "call-1".to_string(),
+            process_id: None,
+            turn_id: "turn-1".to_string(),
+            command: command.clone(),
+            cwd: cwd.clone(),
+            parsed_cmd: parsed_cmd.clone(),
+            source: ExecCommandSource::UserShell,
+            interaction_input: None,
+        }),
+    });
+
+    let _ = drain_insert_history(&mut rx);
+
+    chat.handle_codex_event(Event {
+        id: "call-1".into(),
+        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id: "call-1".to_string(),
+            process_id: None,
+            turn_id: "turn-1".to_string(),
+            command,
+            cwd,
+            parsed_cmd,
+            source: ExecCommandSource::UserShell,
+            interaction_input: None,
+            stdout: "done\n".to_string(),
+            stderr: String::new(),
+            aggregated_output: "done\n".to_string(),
+            exit_code: 0,
+            duration: std::time::Duration::from_millis(5),
+            formatted_output: "done".to_string(),
+            status: CoreExecCommandStatus::Completed,
+        }),
+    });
+
+    assert!(!chat.agent_turn_running);
+    assert!(!chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.status_widget().is_none());
+    assert!(!chat.turn_sleep_inhibitor.is_turn_running());
 }
 
 #[tokio::test]

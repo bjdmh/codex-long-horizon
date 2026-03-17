@@ -1,4 +1,24 @@
 use super::*;
+use codex_protocol::models::ContentItem;
+
+fn is_internal_autonomous_resume_message(item: &ResponseItem) -> bool {
+    let ResponseItem::Message { role, content, .. } = item else {
+        return false;
+    };
+    if role != "developer" {
+        return false;
+    }
+    let Some(text) = content.iter().find_map(|entry| match entry {
+        ContentItem::InputText { text } | ContentItem::OutputText { text } => Some(text.as_str()),
+        ContentItem::InputImage { .. } => None,
+    }) else {
+        return false;
+    };
+
+    text.starts_with("Continue executing the current task autonomously.")
+        || text.starts_with("Continue operating in Non-stop mode.")
+        || text.starts_with("Your last visible update repeated without concrete progress ")
+}
 
 // Return value of `Session::reconstruct_history_from_rollout`, bundling the rebuilt history with
 // the resume/fork hydration metadata derived from the same replay.
@@ -289,7 +309,12 @@ impl Session {
         };
 
         RolloutReconstruction {
-            history: history.raw_items().to_vec(),
+            history: history
+                .raw_items()
+                .iter()
+                .filter(|item| !is_internal_autonomous_resume_message(item))
+                .cloned()
+                .collect(),
             previous_turn_settings,
             reference_context_item,
         }
