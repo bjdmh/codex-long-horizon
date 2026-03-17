@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Tag name to build and publish, for example v0.111.10"
+        required: true
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -22,21 +28,28 @@ jobs:
         working-directory: codex-rs
     env:
       CARGO_PROFILE_RELEASE_LTO: thin
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
 
       - name: Validate tag matches CLI version
         shell: bash
         run: |
           set -euo pipefail
-          [[ "${GITHUB_REF_TYPE}" == "tag" ]] || {
-            echo "expected tag push, got ${GITHUB_REF_TYPE}" >&2
+          [[ "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "release tag ${RELEASE_TAG} does not match v*.*.*" >&2
             exit 1
           }
 
-          tag_version="${GITHUB_REF_NAME#v}"
+          git rev-parse "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1 || {
+            echo "tag ${RELEASE_TAG} does not exist in checkout" >&2
+            exit 1
+          }
+
+          tag_version="${RELEASE_TAG#v}"
           cli_version="$(grep -m1 '^version' cli/Cargo.toml | sed -E 's/version *= *"([^"]+)".*/\1/')"
 
           [[ "${tag_version}" == "${cli_version}" ]] || {
@@ -66,7 +79,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME}"
+          version="${RELEASE_TAG}"
           asset_name="codex-${version}-long-horizon-x86_64-unknown-linux-gnu"
           cp target/x86_64-unknown-linux-gnu/release/codex "../${asset_name}"
           echo "asset_name=${asset_name}" >> "${GITHUB_OUTPUT}"
@@ -77,7 +90,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          commit="$(git -C "${GITHUB_WORKSPACE}" rev-parse "${GITHUB_SHA}^{commit}")"
+          commit="$(git -C "${GITHUB_WORKSPACE}" rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
           notes_path="${RUNNER_TEMP}/release-notes.md"
           git -C "${GITHUB_WORKSPACE}" log -1 --format=%B "${commit}" > "${notes_path}"
           echo >> "${notes_path}"
@@ -86,8 +99,8 @@ jobs:
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_TAG }}
           body_path: ${{ steps.notes.outputs.path }}
           files: ${{ steps.asset.outputs.asset_path }}
           fail_on_unmatched_files: true
