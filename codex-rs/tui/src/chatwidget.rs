@@ -3717,7 +3717,7 @@ impl ChatWidget {
                         return;
                     };
                     let should_submit_now =
-                        self.is_session_configured() && !self.is_plan_streaming_in_tui();
+                        self.is_session_configured() && !self.is_assistant_streaming_in_tui();
                     if should_submit_now {
                         // Submitted is emitted when user submits.
                         // Reset any reasoning header only when we are actually submitting a turn.
@@ -8039,8 +8039,8 @@ impl ChatWidget {
         self.bottom_pane.is_task_running() || self.is_review_mode
     }
 
-    fn is_plan_streaming_in_tui(&self) -> bool {
-        self.plan_stream_controller.is_some()
+    fn is_assistant_streaming_in_tui(&self) -> bool {
+        self.stream_controller.is_some() || self.plan_stream_controller.is_some()
     }
 
     pub(crate) fn composer_is_empty(&self) -> bool {
@@ -8066,7 +8066,7 @@ impl ChatWidget {
             return;
         }
         self.set_collaboration_mask(collaboration_mode);
-        let should_queue = self.is_plan_streaming_in_tui();
+        let should_queue = self.is_assistant_streaming_in_tui();
         let user_message = UserMessage {
             text,
             local_images: Vec::new(),
