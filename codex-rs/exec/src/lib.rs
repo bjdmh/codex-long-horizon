@@ -89,6 +89,7 @@ use codex_core::find_thread_path_by_name_str;
 
 const DEFAULT_ANALYTICS_ENABLED: bool = true;
 const NON_STOP_DEFAULT_MODEL: &str = "gpt-5.4";
+const DEFAULT_NON_STOP_RESUME_PROMPT: &str = "Resume Non-stop execution toward the active goal from the existing thread state. Review the thread, avoid redoing finished work, and continue with the next highest-leverage concrete task.";
 
 enum InitialOperation {
     UserTurn {
@@ -556,6 +557,9 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     } else {
         thread_manager.start_thread(config.clone()).await?
     };
+    if matches!(command.as_ref(), Some(ExecCommand::Resume(_))) {
+        thread.discard_startup_regular_task().await;
+    }
     let primary_thread_id_for_span = primary_thread_id.to_string();
     exec_span.record("thread.id", primary_thread_id_for_span.as_str());
 
@@ -579,7 +583,12 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 })
                 .or(root_prompt);
             let checkpoint = if config.initial_collaboration_mode == ModeKind::NonStop {
-                read_non_stop_checkpoint(config.codex_home.as_path(), primary_thread_id).await
+                let thread_checkpoint =
+                    read_non_stop_checkpoint(config.codex_home.as_path(), primary_thread_id).await;
+                match thread_checkpoint {
+                    Some(checkpoint) => Some(checkpoint),
+                    None => read_latest_non_stop_checkpoint(config.codex_home.as_path()),
+                }
             } else {
                 None
             };
@@ -592,8 +601,10 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     checkpoint
                         .as_ref()
                         .map(build_non_stop_supervisor_prompt)
-                        .unwrap_or_else(|| resolve_prompt(None)),
-                    checkpoint.and_then(|checkpoint| checkpoint.goal_prompt),
+                        .unwrap_or_else(|| DEFAULT_NON_STOP_RESUME_PROMPT.to_string()),
+                    checkpoint
+                        .and_then(|checkpoint| checkpoint.goal_prompt)
+                        .or_else(|| Some(DEFAULT_NON_STOP_RESUME_PROMPT.to_string())),
                 ),
                 None => {
                     let prompt_text = resolve_prompt(None);
@@ -741,6 +752,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         }
     };
     exec_span.record("turn.id", task_id.as_str());
+    let mut current_live_turn_id: Option<String> = None;
 
     // Run the loop until the task is complete.
     // Track whether a fatal error was reported by the server so we can
@@ -793,14 +805,29 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         if thread_id != primary_thread_id && matches!(&event.msg, EventMsg::TurnComplete(_)) {
             continue;
         }
-        let primary_turn_complete_reason = if thread_id == primary_thread_id {
+        if thread_id == primary_thread_id
+            && let EventMsg::TurnStarted(event) = &event.msg
+        {
+            current_live_turn_id = Some(event.turn_id.clone());
+        }
+        let current_primary_turn_complete = if thread_id == primary_thread_id {
             match &event.msg {
-                EventMsg::TurnComplete(event) => Some(event.completion_reason.clone()),
+                EventMsg::TurnComplete(event)
+                    if current_live_turn_id.as_deref() == Some(event.turn_id.as_str()) =>
+                {
+                    Some(event.completion_reason.clone())
+                }
                 _ => None,
             }
         } else {
             None
         };
+        if thread_id == primary_thread_id
+            && let EventMsg::TurnComplete(event) = &event.msg
+            && current_live_turn_id.as_deref() != Some(event.turn_id.as_str())
+        {
+            continue;
+        }
         let shutdown = event_processor.process_event(event);
         if thread_id != primary_thread_id && matches!(shutdown, CodexStatus::InitiateShutdown) {
             continue;
@@ -808,9 +835,10 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         match shutdown {
             CodexStatus::Running => continue,
             CodexStatus::InitiateShutdown => {
-                if primary_turn_complete_reason == Some(TurnCompleteReason::Completed)
+                if current_primary_turn_complete == Some(TurnCompleteReason::Completed)
                     && config.initial_collaboration_mode == ModeKind::NonStop
-                    && maybe_submit_non_stop_follow_up_turn(
+                {
+                    if let Some(_task_id) = maybe_submit_non_stop_follow_up_turn(
                         &config,
                         primary_thread_id,
                         &thread,
@@ -818,9 +846,12 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         &exec_span,
                     )
                     .await?
-                {
-                    continue;
+                    {
+                        current_live_turn_id = None;
+                        continue;
+                    }
                 }
+                current_live_turn_id = None;
                 if !shutdown_requested {
                     thread.submit(Op::Shutdown).await?;
                     shutdown_requested = true;
@@ -980,19 +1011,47 @@ fn build_non_stop_supervisor_prompt(checkpoint: &NonStopCheckpoint) -> String {
     prompt
 }
 
+fn read_latest_non_stop_checkpoint(codex_home: &std::path::Path) -> Option<NonStopCheckpoint> {
+    let checkpoint_dir = codex_home.join("non-stop-checkpoints");
+    let entries = std::fs::read_dir(checkpoint_dir).ok()?;
+    entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                return None;
+            }
+            let payload = std::fs::read(&path).ok()?;
+            serde_json::from_slice::<NonStopCheckpoint>(&payload).ok()
+        })
+        .max_by_key(|checkpoint| checkpoint.updated_at)
+}
+
 async fn maybe_submit_non_stop_follow_up_turn(
     config: &Config,
     thread_id: codex_protocol::ThreadId,
     thread: &Arc<codex_core::CodexThread>,
     defaults: &TurnSubmitDefaults,
     exec_span: &tracing::Span,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<Option<String>> {
     let Some(checkpoint) = read_non_stop_checkpoint(config.codex_home.as_path(), thread_id).await
     else {
-        return Ok(false);
+        return Ok(None);
     };
     if checkpoint.status != NonStopCheckpointStatus::TurnComplete {
-        return Ok(false);
+        return Ok(None);
+    }
+    let has_assistant_signal = checkpoint.last_assistant_control_signal.is_some()
+        || checkpoint
+            .last_agent_message
+            .as_deref()
+            .is_some_and(|message| !message.trim().is_empty());
+    if !has_assistant_signal {
+        warn!(
+            thread_id = %thread_id,
+            "skipping non-stop follow-up because the completed turn produced no assistant output"
+        );
+        return Ok(None);
     }
 
     let prompt = build_non_stop_supervisor_prompt(&checkpoint);
@@ -1016,7 +1075,7 @@ async fn maybe_submit_non_stop_follow_up_turn(
         .await?;
     exec_span.record("turn.id", task_id.as_str());
     info!("Started non-stop follow-up turn with event ID: {task_id}");
-    Ok(true)
+    Ok(Some(task_id))
 }
 
 fn load_output_schema(path: Option<PathBuf>) -> Option<Value> {
@@ -1191,12 +1250,17 @@ fn build_review_request(args: ReviewArgs) -> anyhow::Result<ReviewRequest> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_core::NonStopCheckpointControlSignal;
     use codex_otel::set_parent_from_w3c_trace_context;
+    use codex_protocol::ThreadId;
+    use codex_protocol::protocol::SessionSource;
     use opentelemetry::trace::TraceContextExt;
     use opentelemetry::trace::TraceId;
     use opentelemetry::trace::TracerProvider as _;
     use opentelemetry_sdk::trace::SdkTracerProvider;
     use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
     use tracing_opentelemetry::OpenTelemetrySpanExt;
 
     fn test_tracing_subscriber() -> impl tracing::Subscriber + Send + Sync {
@@ -1364,5 +1428,67 @@ mod tests {
         let err = decode_prompt_bytes(&input).expect_err("invalid utf-8 should fail");
 
         assert_eq!(err, PromptDecodeError::InvalidUtf8 { valid_up_to: 0 });
+    }
+
+    fn test_checkpoint(thread_id: &str, updated_at: i64, goal_prompt: &str) -> NonStopCheckpoint {
+        NonStopCheckpoint {
+            thread_id: ThreadId::from_string(thread_id).expect("thread id"),
+            turn_id: Some("turn-1".to_string()),
+            status: NonStopCheckpointStatus::TurnComplete,
+            collaboration_mode: ModeKind::NonStop,
+            model: "gpt-5.4".to_string(),
+            cwd: PathBuf::from("/tmp"),
+            session_source: SessionSource::Exec,
+            created_at: updated_at - 10,
+            updated_at,
+            goal_prompt: Some(goal_prompt.to_string()),
+            last_agent_message: Some("done".to_string()),
+            last_assistant_control_signal: Some(NonStopCheckpointControlSignal::TaskComplete),
+        }
+    }
+
+    #[test]
+    fn read_latest_non_stop_checkpoint_prefers_highest_updated_at() {
+        let dir = TempDir::new().expect("temp dir");
+        let checkpoint_dir = dir.path().join("non-stop-checkpoints");
+        std::fs::create_dir_all(&checkpoint_dir).expect("create checkpoint dir");
+
+        let older = test_checkpoint("019cff45-7090-7752-a34a-d93c178b7620", 10, "older goal");
+        let newer = test_checkpoint("019cff45-7090-7752-a34a-d93c178b7621", 20, "newer goal");
+
+        std::fs::write(
+            checkpoint_dir.join("older.json"),
+            serde_json::to_vec(&older).expect("serialize older"),
+        )
+        .expect("write older");
+        std::fs::write(
+            checkpoint_dir.join("newer.json"),
+            serde_json::to_vec(&newer).expect("serialize newer"),
+        )
+        .expect("write newer");
+
+        let latest = read_latest_non_stop_checkpoint(dir.path()).expect("latest checkpoint");
+
+        assert_eq!(latest.goal_prompt.as_deref(), Some("newer goal"));
+        assert_eq!(latest.updated_at, 20);
+    }
+
+    #[test]
+    fn read_latest_non_stop_checkpoint_ignores_invalid_json_files() {
+        let dir = TempDir::new().expect("temp dir");
+        let checkpoint_dir = dir.path().join("non-stop-checkpoints");
+        std::fs::create_dir_all(&checkpoint_dir).expect("create checkpoint dir");
+
+        let valid = test_checkpoint("019cff45-7090-7752-a34a-d93c178b7622", 30, "valid goal");
+        std::fs::write(checkpoint_dir.join("broken.json"), b"{not json").expect("write broken");
+        std::fs::write(
+            checkpoint_dir.join("valid.json"),
+            serde_json::to_vec(&valid).expect("serialize valid"),
+        )
+        .expect("write valid");
+
+        let latest = read_latest_non_stop_checkpoint(dir.path()).expect("latest checkpoint");
+
+        assert_eq!(latest.goal_prompt.as_deref(), Some("valid goal"));
     }
 }

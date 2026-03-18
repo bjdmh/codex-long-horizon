@@ -2285,7 +2285,7 @@ impl Config {
                 .as_ref()
                 .map(|t| t.model_availability_nux.clone())
                 .unwrap_or_default(),
-            initial_collaboration_mode: cfg.initial_collaboration_mode.unwrap_or(ModeKind::Execute),
+            initial_collaboration_mode: cfg.initial_collaboration_mode.unwrap_or(ModeKind::LongRun),
             tui_alternate_screen: cfg
                 .tui
                 .as_ref()
@@ -5202,7 +5202,7 @@ model_verbosity = "high"
                 },
                 enforce_residency: Constrained::allow_any(None),
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
-                initial_collaboration_mode: ModeKind::Execute,
+                initial_collaboration_mode: ModeKind::LongRun,
                 user_instructions: None,
                 notify: None,
                 cwd: fixture.cwd(),
@@ -5333,7 +5333,7 @@ model_verbosity = "high"
             },
             enforce_residency: Constrained::allow_any(None),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
-            initial_collaboration_mode: ModeKind::Execute,
+            initial_collaboration_mode: ModeKind::LongRun,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -5462,7 +5462,7 @@ model_verbosity = "high"
             },
             enforce_residency: Constrained::allow_any(None),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
-            initial_collaboration_mode: ModeKind::Execute,
+            initial_collaboration_mode: ModeKind::LongRun,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -5577,7 +5577,7 @@ model_verbosity = "high"
             },
             enforce_residency: Constrained::allow_any(None),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
-            initial_collaboration_mode: ModeKind::Execute,
+            initial_collaboration_mode: ModeKind::LongRun,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),

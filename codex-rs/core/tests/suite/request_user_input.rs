@@ -280,8 +280,8 @@ where
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_user_input_rejected_in_execute_mode_alias() -> anyhow::Result<()> {
-    assert_request_user_input_rejected("Execute", |model| CollaborationMode {
-        mode: ModeKind::Execute,
+    assert_request_user_input_rejected("Long-Run", |model| CollaborationMode {
+        mode: ModeKind::LongRun,
         settings: Settings {
             model,
             reasoning_effort: None,

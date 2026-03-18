@@ -905,7 +905,8 @@
       "enum": [
         "plan",
         "default",
-        "execute"
+        "long_run",
+        "non_stop"
       ],
       "type": "string"
     },

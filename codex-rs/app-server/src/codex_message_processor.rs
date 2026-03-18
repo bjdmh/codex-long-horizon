@@ -7290,7 +7290,7 @@ mod tests {
             model_provider_id: "openai".to_string(),
             service_tier: Some(codex_protocol::config_types::ServiceTier::Flex),
             collaboration_mode: codex_protocol::config_types::CollaborationMode {
-                mode: codex_protocol::config_types::ModeKind::Execute,
+                mode: codex_protocol::config_types::ModeKind::LongRun,
                 settings: codex_protocol::config_types::Settings {
                     model: "gpt-5".to_string(),
                     reasoning_effort: None,

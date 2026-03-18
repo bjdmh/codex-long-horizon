@@ -2273,6 +2273,16 @@ impl Session {
         }
     }
 
+    pub async fn discard_startup_regular_task(&self) {
+        let startup_regular_task = {
+            let mut state = self.state.lock().await;
+            state.take_startup_regular_task()
+        };
+        if let Some(startup_regular_task) = startup_regular_task {
+            startup_regular_task.abort();
+        }
+    }
+
     async fn schedule_startup_prewarm(self: &Arc<Self>, base_instructions: String) {
         let sess = Arc::clone(self);
         let startup_regular_task: JoinHandle<CodexResult<RegularTask>> =
@@ -2498,18 +2508,29 @@ impl Session {
         }
         self.persist_rollout_items(&[RolloutItem::EventMsg(event.msg.clone())])
             .await;
-        if tokio::time::timeout(TERMINAL_EVENT_FLUSH_TIMEOUT, self.flush_rollout())
-            .await
-            .is_err()
-        {
-            warn!(
-                event_id = %event.id,
-                ?event.msg,
-                "timed out waiting for terminal event rollout flush; delivering event anyway"
-            );
-        }
+        let recorder = {
+            let guard = self.services.rollout.lock().await;
+            guard.clone()
+        };
         if let Err(e) = self.tx_event.send(event).await {
             debug!("dropping event because channel is closed: {e}");
+        }
+        if let Some(recorder) = recorder {
+            tokio::spawn(async move {
+                let flush_handle = tokio::spawn(async move { recorder.flush().await });
+                match tokio::time::timeout(TERMINAL_EVENT_FLUSH_TIMEOUT, flush_handle).await {
+                    Ok(Ok(Ok(()))) => {}
+                    Ok(Ok(Err(err))) => {
+                        warn!("failed to flush rollout recorder: {err}");
+                    }
+                    Ok(Err(err)) => {
+                        warn!("rollout flush task join failed: {err}");
+                    }
+                    Err(_) => {
+                        warn!("timed out waiting for terminal event rollout flush");
+                    }
+                }
+            });
         }
     }
 
@@ -5321,7 +5342,7 @@ pub(crate) async fn run_turn(
                                         >= EXECUTE_STALL_ESCALATION_THRESHOLD
                                     {
                                         match autonomous_mode {
-                                            ModeKind::Execute => {
+                                            ModeKind::LongRun => {
                                                 execute_mode_stall_recovery_message(
                                                     execute_stall_count,
                                                     sampling_request_last_agent_message.as_deref(),
@@ -5335,13 +5356,14 @@ pub(crate) async fn run_turn(
                                             }
                                             ModeKind::Plan
                                             | ModeKind::Default
+                                            | ModeKind::Execute
                                             | ModeKind::PairProgramming => {
                                                 unreachable!("non-autonomous mode filtered above")
                                             }
                                         }
                                     } else {
                                         match autonomous_mode {
-                                            ModeKind::Execute => {
+                                            ModeKind::LongRun => {
                                                 execute_mode_auto_continue_message(
                                                     execute_auto_continuation_count + 1,
                                                 )
@@ -5353,6 +5375,7 @@ pub(crate) async fn run_turn(
                                             }
                                             ModeKind::Plan
                                             | ModeKind::Default
+                                            | ModeKind::Execute
                                             | ModeKind::PairProgramming => {
                                                 unreachable!("non-autonomous mode filtered above")
                                             }
@@ -5960,9 +5983,9 @@ const TERMINAL_SIGNAL_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::
 
 const fn autonomous_auto_continuation_limit(mode: ModeKind) -> usize {
     match mode {
-        ModeKind::Execute => EXECUTE_AUTO_CONTINUATION_LIMIT,
+        ModeKind::LongRun => EXECUTE_AUTO_CONTINUATION_LIMIT,
         ModeKind::NonStop => NON_STOP_AUTO_CONTINUATION_LIMIT,
-        ModeKind::Plan | ModeKind::Default | ModeKind::PairProgramming => 0,
+        ModeKind::Plan | ModeKind::Default | ModeKind::Execute | ModeKind::PairProgramming => 0,
     }
 }
 
@@ -9786,6 +9809,59 @@ mod tests {
         assert!(
             session.reference_context_item().await.is_none(),
             "standalone shell tasks should not mutate previous context"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_user_shell_command_emits_turn_complete_in_non_stop_mode() {
+        let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
+        session
+            .update_settings(SessionSettingsUpdate {
+                collaboration_mode: Some(CollaborationMode {
+                    mode: ModeKind::NonStop,
+                    settings: Settings {
+                        model: "gpt-5.4".to_string(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            })
+            .await
+            .expect("update collaboration mode");
+
+        handlers::run_user_shell_command(&session, "sub-id".to_string(), "echo shell".to_string())
+            .await;
+
+        let deadline = StdDuration::from_secs(15);
+        let start = std::time::Instant::now();
+        let mut saw_exec_end = false;
+        let mut saw_turn_complete = false;
+        let mut events = Vec::new();
+        while start.elapsed() < deadline {
+            let remaining = deadline.saturating_sub(start.elapsed());
+            let evt = tokio::time::timeout(remaining, rx.recv())
+                .await
+                .expect("timeout waiting for event")
+                .expect("event");
+            events.push(format!("{:?}", evt.msg));
+            match evt.msg {
+                EventMsg::ExecCommandEnd(_) => saw_exec_end = true,
+                EventMsg::TurnComplete(_) => {
+                    saw_turn_complete = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        assert!(
+            saw_exec_end,
+            "expected standalone shell ExecCommandEnd, got: {events:#?}"
+        );
+        assert!(
+            saw_turn_complete,
+            "expected standalone shell TurnComplete in non-stop mode, got: {events:#?}"
         );
     }
 

@@ -124,8 +124,8 @@ fn default_exec_sessions_use_execute_collaboration_mode() -> anyhow::Result<()> 
 
     let rollout = session_rollout_contents(test.home_path());
     assert!(
-        rollout.contains("Collaboration Style: Execute"),
-        "expected Execute collaboration instructions in session rollout, got: {rollout}"
+        rollout.contains("Collaboration Style: Long-Run"),
+        "expected Long-Run collaboration instructions in session rollout, got: {rollout}"
     );
     Ok(())
 }

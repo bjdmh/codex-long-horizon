@@ -197,6 +197,7 @@ export type { Tool } from "./Tool";
 export type { TurnAbortReason } from "./TurnAbortReason";
 export type { TurnAbortedEvent } from "./TurnAbortedEvent";
 export type { TurnCompleteEvent } from "./TurnCompleteEvent";
+export type { TurnCompleteReason } from "./TurnCompleteReason";
 export type { TurnDiffEvent } from "./TurnDiffEvent";
 export type { TurnItem } from "./TurnItem";
 export type { TurnStartedEvent } from "./TurnStartedEvent";

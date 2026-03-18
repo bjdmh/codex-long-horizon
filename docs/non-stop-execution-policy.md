@@ -38,7 +38,7 @@ The default outcome after a response finishes is therefore:
 
 ### Meaning of `<task_complete>` in Non-stop
 
-In `Execute`, `<task_complete>` means "the requested task is done."
+In `Long-Run`, `<task_complete>` means "the requested task is done."
 
 In `Non-stop`, `<task_complete>` should be reserved for a stronger claim:
 

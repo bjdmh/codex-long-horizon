@@ -6,8 +6,8 @@ use codex_protocol::openai_models::ReasoningEffort;
 const COLLABORATION_MODE_PLAN: &str = include_str!("../../templates/collaboration_mode/plan.md");
 const COLLABORATION_MODE_DEFAULT: &str =
     include_str!("../../templates/collaboration_mode/default.md");
-const COLLABORATION_MODE_EXECUTE: &str =
-    include_str!("../../templates/collaboration_mode/execute.md");
+const COLLABORATION_MODE_LONG_RUN: &str =
+    include_str!("../../templates/collaboration_mode/long_run.md");
 const COLLABORATION_MODE_NON_STOP: &str =
     include_str!("../../templates/collaboration_mode/non_stop.md");
 const KNOWN_MODE_NAMES_PLACEHOLDER: &str = "{{KNOWN_MODE_NAMES}}";
@@ -30,7 +30,7 @@ pub(crate) fn builtin_collaboration_mode_presets(
 ) -> Vec<CollaborationModeMask> {
     vec![
         default_preset(collaboration_modes_config),
-        execute_preset(),
+        long_run_preset(),
         non_stop_preset(),
         plan_preset(),
     ]
@@ -56,13 +56,13 @@ fn default_preset(collaboration_modes_config: CollaborationModesConfig) -> Colla
     }
 }
 
-fn execute_preset() -> CollaborationModeMask {
+fn long_run_preset() -> CollaborationModeMask {
     CollaborationModeMask {
-        name: ModeKind::Execute.display_name().to_string(),
-        mode: Some(ModeKind::Execute),
+        name: ModeKind::LongRun.display_name().to_string(),
+        mode: Some(ModeKind::LongRun),
         model: None,
         reasoning_effort: None,
-        developer_instructions: Some(Some(COLLABORATION_MODE_EXECUTE.to_string())),
+        developer_instructions: Some(Some(COLLABORATION_MODE_LONG_RUN.to_string())),
     }
 }
 
@@ -145,20 +145,20 @@ mod tests {
             default_preset(CollaborationModesConfig::default()).name,
             ModeKind::Default.display_name()
         );
-        assert_eq!(execute_preset().name, ModeKind::Execute.display_name());
+        assert_eq!(long_run_preset().name, ModeKind::LongRun.display_name());
         assert_eq!(non_stop_preset().name, ModeKind::NonStop.display_name());
         assert_eq!(
             plan_preset().reasoning_effort,
             Some(Some(ReasoningEffort::Medium))
         );
-        assert_eq!(execute_preset().reasoning_effort, None);
+        assert_eq!(long_run_preset().reasoning_effort, None);
         assert_eq!(non_stop_preset().reasoning_effort, None);
     }
 
     #[test]
-    fn execute_preset_preserves_existing_reasoning_effort() {
+    fn long_run_preset_preserves_existing_reasoning_effort() {
         let mode = CollaborationMode {
-            mode: ModeKind::Execute,
+            mode: ModeKind::LongRun,
             settings: Settings {
                 model: "gpt-5.4".to_string(),
                 reasoning_effort: Some(ReasoningEffort::Low),
@@ -166,7 +166,7 @@ mod tests {
             },
         };
 
-        let updated = mode.apply_mask(&execute_preset());
+        let updated = mode.apply_mask(&long_run_preset());
 
         assert_eq!(updated.reasoning_effort(), Some(ReasoningEffort::Low));
     }

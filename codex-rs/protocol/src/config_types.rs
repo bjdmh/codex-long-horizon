@@ -182,20 +182,30 @@ pub enum AltScreenMode {
 pub enum ModeKind {
     Plan,
     #[default]
-    #[serde(alias = "code", alias = "pair_programming", alias = "custom")]
+    #[serde(
+        alias = "code",
+        alias = "pair_programming",
+        alias = "execute",
+        alias = "custom"
+    )]
     Default,
     #[doc(hidden)]
     #[serde(skip_serializing, skip_deserializing)]
     #[schemars(skip)]
     #[ts(skip)]
     PairProgramming,
+    #[doc(hidden)]
+    #[serde(skip_serializing, skip_deserializing)]
+    #[schemars(skip)]
+    #[ts(skip)]
     Execute,
+    LongRun,
     NonStop,
 }
 
 pub const TUI_VISIBLE_COLLABORATION_MODES: [ModeKind; 4] = [
     ModeKind::Default,
-    ModeKind::Execute,
+    ModeKind::LongRun,
     ModeKind::NonStop,
     ModeKind::Plan,
 ];
@@ -207,6 +217,7 @@ impl ModeKind {
             Self::Default => "Default",
             Self::PairProgramming => "Pair Programming",
             Self::Execute => "Execute",
+            Self::LongRun => "Long-Run",
             Self::NonStop => "Non-stop",
         }
     }
@@ -214,12 +225,12 @@ impl ModeKind {
     pub const fn is_tui_visible(self) -> bool {
         matches!(
             self,
-            Self::Plan | Self::Default | Self::Execute | Self::NonStop
+            Self::Plan | Self::Default | Self::LongRun | Self::NonStop
         )
     }
 
     pub const fn is_autonomous(self) -> bool {
-        matches!(self, Self::Execute | Self::NonStop)
+        matches!(self, Self::LongRun | Self::NonStop)
     }
 
     pub const fn allows_request_user_input(self) -> bool {
@@ -352,7 +363,7 @@ mod tests {
 
     #[test]
     fn mode_kind_deserializes_alias_values_to_default() {
-        for alias in ["code", "pair_programming", "custom"] {
+        for alias in ["code", "pair_programming", "execute", "custom"] {
             let json = format!("\"{alias}\"");
             let mode: ModeKind = serde_json::from_str(&json).expect("deserialize mode");
             assert_eq!(ModeKind::Default, mode);
@@ -360,10 +371,11 @@ mod tests {
     }
 
     #[test]
-    fn mode_kind_deserializes_execute_to_execute() {
-        let mode: ModeKind = serde_json::from_str("\"execute\"").expect("deserialize execute mode");
+    fn mode_kind_deserializes_long_run_to_long_run() {
+        let mode: ModeKind =
+            serde_json::from_str("\"long_run\"").expect("deserialize long-run mode");
 
-        assert_eq!(ModeKind::Execute, mode);
+        assert_eq!(ModeKind::LongRun, mode);
     }
 
     #[test]
@@ -378,7 +390,7 @@ mod tests {
     fn tui_visible_collaboration_modes_match_mode_kind_visibility() {
         let expected = [
             ModeKind::Default,
-            ModeKind::Execute,
+            ModeKind::LongRun,
             ModeKind::NonStop,
             ModeKind::Plan,
         ];
@@ -389,5 +401,6 @@ mod tests {
         }
 
         assert!(!ModeKind::PairProgramming.is_tui_visible());
+        assert!(!ModeKind::Execute.is_tui_visible());
     }
 }

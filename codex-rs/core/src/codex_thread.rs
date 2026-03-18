@@ -91,6 +91,10 @@ impl CodexThread {
         self.codex.next_event().await
     }
 
+    pub async fn discard_startup_regular_task(&self) {
+        self.codex.session.discard_startup_regular_task().await;
+    }
+
     pub async fn agent_status(&self) -> AgentStatus {
         self.codex.agent_status().await
     }

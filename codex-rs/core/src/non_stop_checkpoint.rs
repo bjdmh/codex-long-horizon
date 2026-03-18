@@ -103,8 +103,13 @@ async fn read_checkpoint_from_disk(
     thread_id: ThreadId,
 ) -> Option<NonStopCheckpoint> {
     let path = checkpoint_path(codex_home, thread_id);
-    let data = tokio::fs::read(&path).await.ok()?;
-    serde_json::from_slice(&data).ok()
+    tokio::task::spawn_blocking(move || {
+        let data = std::fs::read(&path).ok()?;
+        serde_json::from_slice(&data).ok()
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 pub(crate) async fn maybe_persist_checkpoint(
@@ -218,8 +223,19 @@ pub(crate) async fn maybe_persist_checkpoint_with_context(
         }
         _ => return,
     }
-    write_checkpoint(codex_home, thread_id, &checkpoint).await;
     cache_checkpoint(checkpoint);
+    if matches!(
+        event,
+        EventMsg::TurnComplete(_)
+            | EventMsg::TurnAborted(_)
+            | EventMsg::Error(_)
+            | EventMsg::ShutdownComplete
+    ) {
+        spawn_checkpoint_write(codex_home.to_path_buf(), thread_id).await;
+        return;
+    }
+
+    write_checkpoint(codex_home, thread_id).await;
 }
 
 pub async fn register_non_stop_session(
@@ -267,42 +283,45 @@ pub async fn register_non_stop_session(
         last_assistant_control_signal: existing_last_assistant_control_signal,
     };
 
-    write_checkpoint(codex_home, thread_id, &checkpoint).await;
     cache_checkpoint(checkpoint);
+    write_checkpoint(codex_home, thread_id).await;
 }
 
-async fn write_checkpoint(codex_home: &Path, thread_id: ThreadId, checkpoint: &NonStopCheckpoint) {
+async fn spawn_checkpoint_write(codex_home: PathBuf, thread_id: ThreadId) {
+    tokio::spawn(async move {
+        write_checkpoint(codex_home.as_path(), thread_id).await;
+    });
+}
+
+async fn write_checkpoint(codex_home: &Path, thread_id: ThreadId) {
     let path = checkpoint_path(codex_home, thread_id);
-    if let Some(parent) = path.parent()
-        && let Err(err) = tokio::fs::create_dir_all(parent).await
-    {
-        warn!(
-            "failed to create non-stop checkpoint dir {}: {err}",
-            parent.display()
-        );
+    let Some(checkpoint) = cached_checkpoint(thread_id) else {
         return;
-    }
-    let tmp_path = path.with_extension("json.tmp");
-    let payload = match serde_json::to_vec_pretty(checkpoint) {
-        Ok(payload) => payload,
-        Err(err) => {
-            warn!("failed to serialize non-stop checkpoint for {thread_id}: {err}");
-            return;
-        }
     };
-    if let Err(err) = tokio::fs::write(&tmp_path, payload).await {
-        warn!(
-            "failed to write non-stop checkpoint temp file {}: {err}",
-            tmp_path.display()
-        );
-        return;
-    }
-    if let Err(err) = tokio::fs::rename(&tmp_path, &path).await {
-        warn!(
-            "failed to rename non-stop checkpoint {} -> {}: {err}",
-            tmp_path.display(),
-            path.display()
-        );
+    let write_result = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let tmp_path = path.with_extension("json.tmp");
+        let payload =
+            serde_json::to_vec_pretty(&checkpoint).map_err(|err| std::io::Error::other(err))?;
+        std::fs::write(&tmp_path, payload)?;
+        std::fs::rename(&tmp_path, &path)?;
+        Ok(())
+    })
+    .await;
+
+    match write_result {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => {
+            warn!(
+                "failed to write non-stop checkpoint {}: {err}",
+                checkpoint_path(codex_home, thread_id).display()
+            );
+        }
+        Err(err) => {
+            warn!("failed to join non-stop checkpoint writer for {thread_id}: {err}");
+        }
     }
 }
 

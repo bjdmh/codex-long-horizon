@@ -37,6 +37,46 @@ run_one() {
     status="failed"
   fi
 
+  if [ ! -f "$run_dir/summary.json" ]; then
+    RUN_DIR="$run_dir" STATUS="$status" python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+run_dir = Path(os.environ['RUN_DIR'])
+status = os.environ['STATUS']
+scenarios = []
+totals = {
+    'exec_steps': 0,
+    'apply_patch_steps': 0,
+    'file_updates': 0,
+    'plan_updates': 0,
+    'thinking_blocks': 0,
+    'optional_confirmation_hits': 0,
+    'duration_secs': 0,
+}
+for result_path in sorted(run_dir.glob('*/result.json')):
+    try:
+        result = json.loads(result_path.read_text())
+    except Exception:
+        continue
+    scenarios.append(result)
+    metrics = result.get('metrics', {})
+    for key in ('exec_steps', 'apply_patch_steps', 'file_updates', 'plan_updates', 'thinking_blocks', 'optional_confirmation_hits'):
+        totals[key] += int(metrics.get(key, 0))
+    totals['duration_secs'] += int(result.get('duration_secs', 0))
+
+summary = {
+    'generated_at': None,
+    'scenarios': scenarios,
+    'totals': totals,
+    'status': status,
+    'incomplete': True,
+}
+(run_dir / 'summary.json').write_text(json.dumps(summary, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+PY
+  fi
+
   python3 - <<PY >> "$summary_jsonl"
 import json
 from pathlib import Path

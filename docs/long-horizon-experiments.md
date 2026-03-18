@@ -1,11 +1,11 @@
 # Long-Horizon Experiments
 
 This branch includes both deterministic integration tests and a reproducible
-real-model benchmark for Execute mode.
+real-model benchmark for Long-Run mode.
 
 ## Deterministic coverage
 
-The core Execute-mode integration tests live in:
+The core Long-Run-mode integration tests live in:
 
 - `codex-rs/core/tests/suite/execute_mode.rs`
 
@@ -30,7 +30,7 @@ with:
 That installs the compiler/tooling needed by this repo plus Node 22, pytest,
 and `just`.
 
-To clone an existing CODEX_HOME into an Execute-mode experiment home, run:
+To clone an existing CODEX_HOME into an Long-Run-mode experiment home, run:
 
 - `just long-horizon-home`
 
@@ -51,7 +51,7 @@ Use:
 - `scripts/run-long-horizon-experiments.sh`
 - `just long-horizon-bench`
 
-The script runs four real Execute-mode tasks with the configured `CODEX_HOME`
+The script runs four real Long-Run-mode tasks with the configured `CODEX_HOME`
 experiment profile:
 
 1. a Python bug-fix task that requires reproducing failing tests, editing code,

@@ -1532,16 +1532,12 @@ pub struct ContextCompactedEvent;
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum TurnCompleteReason {
+    #[default]
     Completed,
     Blocked,
     NoMoreWork,
-}
-
-impl Default for TurnCompleteReason {
-    fn default() -> Self {
-        Self::Completed
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

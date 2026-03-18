@@ -135,6 +135,7 @@ impl Session {
 
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
+        let (start_tx, start_rx) = tokio::sync::oneshot::channel::<()>();
 
         let done_clone = Arc::clone(&done);
         let handle = {
@@ -154,6 +155,7 @@ impl Session {
             let task_kind_for_finish = task_for_run.kind();
             tokio::spawn(
                 async move {
+                    let _ = start_rx.await;
                     let ctx_for_finish = Arc::clone(&ctx);
                     let last_agent_message = task_for_run
                         .run(
@@ -200,6 +202,7 @@ impl Session {
             _timer: timer,
         };
         self.register_new_active_task(running_task).await;
+        let _ = start_tx.send(());
     }
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {

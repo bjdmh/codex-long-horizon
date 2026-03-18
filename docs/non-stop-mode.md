@@ -1,8 +1,8 @@
 # Non-stop Mode
 
-`Non-stop` is a new collaboration mode built on top of `Execute`.
+`Non-stop` is a new collaboration mode built on top of `Long-Run`.
 
-`Execute` is good at finishing one concrete task inside one turn. `Non-stop` is
+`Long-Run` is good at finishing one concrete task inside one turn. `Non-stop` is
 for long-lived autonomy: once a task is finished, the agent should immediately
 pick the next concrete task that moves the user's goal forward instead of
 stopping for optional confirmation.
@@ -26,7 +26,7 @@ See also:
 
 ### Mode contract
 
-- `Execute`: end the turn when the task is complete or blocked.
+- `Long-Run`: end the turn when the task is complete or blocked.
 - `Non-stop`: keep searching for the next useful step instead of stopping at the
   first local completion point.
 - `Non-stop` stops automatically only when required human input is missing, or
@@ -98,7 +98,7 @@ Autonomous innovation should be explicit and bounded:
 ## Initial implementation plan
 
 1. Add `Non-stop` mode to protocol, presets, docs, and UI mode lists.
-2. Make the core turn loop distinguish `Execute` from `Non-stop`.
+2. Make the core turn loop distinguish `Long-Run` from `Non-stop`.
 3. In `Non-stop`, continue automatically after ordinary response completion.
 4. Reserve `<task_complete>` for "I searched for the next step and there is
    nothing meaningful left to do."

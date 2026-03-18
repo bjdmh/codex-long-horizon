@@ -40,7 +40,7 @@ pub(crate) enum AssistantControlSignal {
 
 pub(crate) fn execute_mode_auto_continue_message(attempt: usize) -> String {
     format!(
-        "Continue executing the current task autonomously. This is execute-mode auto-continuation #{attempt}. Do not stop for a status update, a completion guess, or an optional next step. Do not ask the user whether to continue unless you are truly blocked on required information. Only end the turn if the task is complete and you include {TASK_COMPLETE_OPEN_TAG}...{TASK_COMPLETE_CLOSE_TAG}, or if you are blocked on information only the user can provide and you include {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG}."
+        "Continue executing the current task autonomously. This is long-run auto-continuation #{attempt}. Do not stop for a status update, a completion guess, or an optional next step. Do not ask the user whether to continue unless you are truly blocked on required information. Only end the turn if the task is complete and you include {TASK_COMPLETE_OPEN_TAG}...{TASK_COMPLETE_CLOSE_TAG}, or if you are blocked on information only the user can provide and you include {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG}."
     )
 }
 
@@ -121,6 +121,8 @@ pub(crate) fn non_stop_await_user_input_is_justified(text: Option<&str>) -> bool
         "which",
         "account",
         "access",
+        "blocked",
+        "blocker",
         "授权",
         "批准",
         "审批",
@@ -135,6 +137,7 @@ pub(crate) fn non_stop_await_user_input_is_justified(text: Option<&str>) -> bool
         "密码",
         "账号",
         "访问",
+        "阻塞",
     ]
     .iter()
     .any(|needle| normalized.contains(needle));
@@ -589,7 +592,7 @@ mod tests {
     fn handle_non_tool_response_item_strips_execute_control_tags() {
         let item = assistant_output_text("<task_complete>Done and verified.</task_complete>");
 
-        let turn_item = handle_non_tool_response_item(&item, ModeKind::Execute)
+        let turn_item = handle_non_tool_response_item(&item, ModeKind::LongRun)
             .expect("assistant message should parse");
 
         let TurnItem::AgentMessage(agent_message) = turn_item else {
@@ -644,6 +647,9 @@ mod tests {
     fn non_stop_await_user_input_requires_clear_user_only_blocker() {
         assert!(non_stop_await_user_input_is_justified(Some(
             "I need production credentials before I can continue."
+        )));
+        assert!(non_stop_await_user_input_is_justified(Some(
+            "I am still blocked in the test fixture until you provide the missing credential."
         )));
         assert!(!non_stop_await_user_input_is_justified(Some(
             "I need to wait for CI to finish."

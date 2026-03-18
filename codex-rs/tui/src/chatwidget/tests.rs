@@ -5343,11 +5343,11 @@ async fn collab_mode_shift_tab_cycles_only_when_idle() {
 
     let initial = chat.current_collaboration_mode().clone();
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::NonStop);
     assert_eq!(chat.current_collaboration_mode(), &initial);
 
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
     assert_eq!(chat.current_collaboration_mode(), &initial);
 
     chat.on_task_started();
@@ -5443,7 +5443,7 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
         Op::UserTurn {
             collaboration_mode:
                 Some(CollaborationMode {
-                    mode: ModeKind::Execute,
+                    mode: ModeKind::LongRun,
                     ..
                 }),
             personality: Some(Personality::Pragmatic),
@@ -5461,7 +5461,7 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
         Op::UserTurn {
             collaboration_mode:
                 Some(CollaborationMode {
-                    mode: ModeKind::Execute,
+                    mode: ModeKind::LongRun,
                     ..
                 }),
             personality: Some(Personality::Pragmatic),
@@ -5577,7 +5577,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
     };
 
     let chat = ChatWidget::new(init, thread_manager);
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Execute);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::LongRun);
     assert_eq!(chat.current_model(), resolved_model);
 }
 
@@ -5627,7 +5627,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
     };
 
     let chat = ChatWidget::new(init, thread_manager);
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Execute);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::LongRun);
     assert_eq!(chat.current_model(), resolved_model);
 }
 
@@ -5696,7 +5696,7 @@ async fn collab_mode_is_sent_after_enabling() {
         Op::UserTurn {
             collaboration_mode:
                 Some(CollaborationMode {
-                    mode: ModeKind::Execute,
+                    mode: ModeKind::LongRun,
                     ..
                 }),
             personality: Some(Personality::Pragmatic),
@@ -5720,7 +5720,7 @@ async fn collab_mode_applies_default_preset() {
         Op::UserTurn {
             collaboration_mode:
                 Some(CollaborationMode {
-                    mode: ModeKind::Execute,
+                    mode: ModeKind::LongRun,
                     ..
                 }),
             personality: Some(Personality::Pragmatic),
@@ -5731,8 +5731,8 @@ async fn collab_mode_applies_default_preset() {
         }
     }
 
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Execute);
-    assert_eq!(chat.current_collaboration_mode().mode, ModeKind::Execute);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::LongRun);
+    assert_eq!(chat.current_collaboration_mode().mode, ModeKind::LongRun);
 }
 
 #[tokio::test]

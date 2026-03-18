@@ -79,8 +79,7 @@ impl SessionTask for UserShellCommandTask {
     ) -> Option<String> {
         let sess = session.clone_session();
         let turn_context_for_finish = Arc::clone(&turn_context);
-        let completion_token = cancellation_token.clone();
-        execute_user_shell_command(
+        let was_cancelled = execute_user_shell_command(
             sess.clone(),
             turn_context,
             self.command.clone(),
@@ -88,7 +87,7 @@ impl SessionTask for UserShellCommandTask {
             UserShellCommandMode::StandaloneTurn,
         )
         .await;
-        if !completion_token.is_cancelled() {
+        if !was_cancelled {
             sess.on_task_finished(turn_context_for_finish, None).await;
         }
         None
@@ -101,7 +100,7 @@ pub(crate) async fn execute_user_shell_command(
     command: String,
     cancellation_token: CancellationToken,
     mode: UserShellCommandMode,
-) {
+) -> bool {
     session
         .services
         .otel_manager
@@ -228,6 +227,7 @@ pub(crate) async fn execute_user_shell_command(
                     }),
                 )
                 .await;
+            return true;
         }
         Ok(Ok(output)) => {
             session
@@ -259,7 +259,6 @@ pub(crate) async fn execute_user_shell_command(
                     }),
                 )
                 .await;
-
             persist_user_shell_output(&session, turn_context.as_ref(), &raw_command, &output, mode)
                 .await;
         }
@@ -309,6 +308,7 @@ pub(crate) async fn execute_user_shell_command(
             .await;
         }
     }
+    false
 }
 
 async fn persist_user_shell_output(
@@ -343,5 +343,170 @@ async fn persist_user_shell_output(
         session
             .record_conversation_items(turn_context, &response_items)
             .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codex::SessionSettingsUpdate;
+    use crate::codex::make_session_and_context_with_rx;
+    use codex_protocol::config_types::ModeKind;
+    use pretty_assertions::assert_eq;
+    use tokio::time::Duration;
+    use tokio::time::timeout;
+
+    #[tokio::test]
+    async fn standalone_user_shell_command_returns_after_exec_end() {
+        let (session, turn_context, rx) = make_session_and_context_with_rx().await;
+        let cancellation_token = CancellationToken::new();
+
+        timeout(
+            Duration::from_secs(10),
+            execute_user_shell_command(
+                session,
+                turn_context,
+                "echo done".to_string(),
+                cancellation_token,
+                UserShellCommandMode::StandaloneTurn,
+            ),
+        )
+        .await
+        .expect("user shell command should finish");
+
+        let mut saw_exec_end = false;
+        while let Ok(event) = timeout(Duration::from_millis(50), rx.recv()).await {
+            let event = event.expect("event");
+            if let EventMsg::ExecCommandEnd(end) = event.msg {
+                saw_exec_end = true;
+                assert_eq!(end.exit_code, 0);
+                break;
+            }
+        }
+
+        assert!(saw_exec_end, "expected ExecCommandEnd event");
+    }
+
+    #[tokio::test]
+    async fn standalone_user_shell_command_returns_after_exec_end_in_non_stop_mode() {
+        let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
+        session
+            .update_settings(SessionSettingsUpdate {
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: ModeKind::NonStop,
+                    settings: codex_protocol::config_types::Settings {
+                        model: "gpt-5.4".to_string(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            })
+            .await
+            .expect("update session settings");
+        let turn_context = session.new_default_turn().await;
+        let cancellation_token = CancellationToken::new();
+
+        timeout(
+            Duration::from_secs(10),
+            execute_user_shell_command(
+                session,
+                turn_context,
+                "echo done".to_string(),
+                cancellation_token,
+                UserShellCommandMode::StandaloneTurn,
+            ),
+        )
+        .await
+        .expect("user shell command should finish");
+
+        let mut events = Vec::new();
+        while let Ok(event) = timeout(Duration::from_millis(200), rx.recv()).await {
+            let event = event.expect("event");
+            events.push(format!("{:?}", event.msg));
+            if matches!(event.msg, EventMsg::ExecCommandEnd(_)) {
+                break;
+            }
+        }
+
+        assert!(
+            events.iter().any(|event| event.contains("ExecCommandEnd")),
+            "expected ExecCommandEnd event, got: {events:#?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn standalone_user_shell_task_emits_turn_complete() {
+        let (session, turn_context, rx) = make_session_and_context_with_rx().await;
+        let session = std::sync::Arc::new(session);
+
+        session
+            .spawn_task(
+                turn_context.clone(),
+                Vec::new(),
+                UserShellCommandTask::new("echo done".to_string()),
+            )
+            .await;
+
+        let mut saw_turn_complete = false;
+        let mut events = Vec::new();
+        while let Ok(event) = timeout(Duration::from_secs(10), rx.recv()).await {
+            let event = event.expect("event");
+            events.push(format!("{:?}", event.msg));
+            if matches!(event.msg, EventMsg::TurnComplete(_)) {
+                saw_turn_complete = true;
+                break;
+            }
+        }
+
+        assert!(
+            saw_turn_complete,
+            "expected TurnComplete event, got: {events:#?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn standalone_user_shell_task_emits_turn_complete_in_non_stop_mode() {
+        let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
+        session
+            .update_settings(SessionSettingsUpdate {
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: ModeKind::NonStop,
+                    settings: codex_protocol::config_types::Settings {
+                        model: "gpt-5.4".to_string(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            })
+            .await
+            .expect("update session settings");
+        let turn_context = session.new_default_turn().await;
+        let session = std::sync::Arc::new(session);
+
+        session
+            .spawn_task(
+                turn_context.clone(),
+                Vec::new(),
+                UserShellCommandTask::new("echo done".to_string()),
+            )
+            .await;
+
+        let mut saw_turn_complete = false;
+        let mut events = Vec::new();
+        while let Ok(event) = timeout(Duration::from_secs(10), rx.recv()).await {
+            let event = event.expect("event");
+            events.push(format!("{:?}", event.msg));
+            if matches!(event.msg, EventMsg::TurnComplete(_)) {
+                saw_turn_complete = true;
+                break;
+            }
+        }
+
+        assert!(
+            saw_turn_complete,
+            "expected TurnComplete event in non-stop mode, got: {events:#?}"
+        );
     }
 }

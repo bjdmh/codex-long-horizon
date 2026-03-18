@@ -133,6 +133,7 @@ mod tests {
         assert!(ModeKind::Plan.allows_request_user_input());
         assert!(!ModeKind::Default.allows_request_user_input());
         assert!(!ModeKind::Execute.allows_request_user_input());
+        assert!(!ModeKind::LongRun.allows_request_user_input());
         assert!(!ModeKind::NonStop.allows_request_user_input());
         assert!(!ModeKind::PairProgramming.allows_request_user_input());
     }
@@ -154,6 +155,10 @@ mod tests {
         assert_eq!(
             request_user_input_unavailable_message(ModeKind::Execute, false),
             Some("request_user_input is unavailable in Execute mode".to_string())
+        );
+        assert_eq!(
+            request_user_input_unavailable_message(ModeKind::LongRun, false),
+            Some("request_user_input is unavailable in Long-Run mode".to_string())
         );
         assert_eq!(
             request_user_input_unavailable_message(ModeKind::NonStop, false),

@@ -200,8 +200,8 @@ async fn turn_start_defaults_to_execute_collaboration_mode_v2() -> Result<()> {
     let request = response_mock.single_request();
     let payload_text = request.body_json().to_string();
     assert!(
-        payload_text.contains("Collaboration Style: Execute"),
-        "expected Execute collaboration instructions in payload, got: {payload_text}"
+        payload_text.contains("Collaboration Style: Long-Run"),
+        "expected Long-Run collaboration instructions in payload, got: {payload_text}"
     );
 
     Ok(())

@@ -2057,6 +2057,14 @@
         {
           "description": "Agent has completed all actions. v1 wire format uses `task_complete`; accept `turn_complete` for v2 interop.",
           "properties": {
+            "completion_reason": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/TurnCompleteReason"
+                }
+              ],
+              "default": "completed"
+            },
             "last_agent_message": {
               "type": [
                 "string",
@@ -7448,6 +7456,14 @@
       ],
       "type": "string"
     },
+    "TurnCompleteReason": {
+      "enum": [
+        "completed",
+        "blocked",
+        "no_more_work"
+      ],
+      "type": "string"
+    },
     "TurnItem": {
       "oneOf": [
         {
@@ -10744,7 +10760,8 @@
         "enum": [
           "plan",
           "default",
-          "execute"
+          "long_run",
+          "non_stop"
         ],
         "type": "string"
       },

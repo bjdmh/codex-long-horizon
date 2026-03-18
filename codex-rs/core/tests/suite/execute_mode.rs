@@ -35,7 +35,7 @@ const NON_STOP_INVALID_AWAIT_PREFIX: &str = "Your previous <await_user_input>...
 
 fn execute_mode(model: String) -> CollaborationMode {
     CollaborationMode {
-        mode: ModeKind::Execute,
+        mode: ModeKind::LongRun,
         settings: Settings {
             model,
             reasoning_effort: None,
@@ -729,7 +729,7 @@ async fn execute_mode_warns_when_auto_continuation_limit_is_hit() -> Result<()> 
         EventMsg::Warning(event)
             if event
                 .message
-                .contains("Execute mode reached the auto-continuation limit") =>
+                .contains("Long-Run mode reached the auto-continuation limit") =>
         {
             Some(event.message.clone())
         }
