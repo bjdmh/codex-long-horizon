@@ -747,6 +747,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     // exit with a non-zero status for automation-friendly signaling.
     let mut error_seen = false;
     let mut shutdown_requested = false;
+    let mut last_non_stop_follow_up_turn_id: Option<String> = None;
     while let Some(envelope) = rx.recv().await {
         let ThreadEventEnvelope {
             thread_id,
@@ -793,14 +794,18 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         if thread_id != primary_thread_id && matches!(&event.msg, EventMsg::TurnComplete(_)) {
             continue;
         }
-        let primary_turn_complete_reason = if thread_id == primary_thread_id {
-            match &event.msg {
-                EventMsg::TurnComplete(event) => Some(event.completion_reason.clone()),
-                _ => None,
-            }
-        } else {
-            None
-        };
+        let (primary_turn_complete_reason, primary_completed_turn_id) =
+            if thread_id == primary_thread_id {
+                match &event.msg {
+                    EventMsg::TurnComplete(event) => (
+                        Some(event.completion_reason.clone()),
+                        Some(event.turn_id.clone()),
+                    ),
+                    _ => (None, None),
+                }
+            } else {
+                (None, None)
+            };
         let shutdown = event_processor.process_event(event);
         if thread_id != primary_thread_id && matches!(shutdown, CodexStatus::InitiateShutdown) {
             continue;
@@ -808,17 +813,21 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         match shutdown {
             CodexStatus::Running => continue,
             CodexStatus::InitiateShutdown => {
-                if primary_turn_complete_reason == Some(TurnCompleteReason::Completed)
-                    && config.initial_collaboration_mode == ModeKind::NonStop
-                    && maybe_submit_non_stop_follow_up_turn(
-                        &config,
-                        primary_thread_id,
-                        &thread,
-                        &turn_submit_defaults,
-                        &exec_span,
-                    )
-                    .await?
+                if should_start_non_stop_follow_up_turn(
+                    config.initial_collaboration_mode,
+                    primary_turn_complete_reason.as_ref(),
+                    primary_completed_turn_id.as_deref(),
+                    last_non_stop_follow_up_turn_id.as_deref(),
+                ) && maybe_submit_non_stop_follow_up_turn(
+                    &config,
+                    primary_thread_id,
+                    &thread,
+                    &turn_submit_defaults,
+                    &exec_span,
+                )
+                .await?
                 {
+                    last_non_stop_follow_up_turn_id = primary_completed_turn_id;
                     continue;
                 }
                 if !shutdown_requested {
@@ -978,6 +987,18 @@ fn build_non_stop_supervisor_prompt(checkpoint: &NonStopCheckpoint) -> String {
         "\nOnly stop if you are blocked on information the user must provide, and then include <await_user_input>...</await_user_input>.",
     );
     prompt
+}
+
+fn should_start_non_stop_follow_up_turn(
+    collaboration_mode: ModeKind,
+    completion_reason: Option<&TurnCompleteReason>,
+    completed_turn_id: Option<&str>,
+    last_followed_up_turn_id: Option<&str>,
+) -> bool {
+    collaboration_mode == ModeKind::NonStop
+        && completion_reason == Some(&TurnCompleteReason::Completed)
+        && completed_turn_id.is_some()
+        && completed_turn_id != last_followed_up_turn_id
 }
 
 async fn maybe_submit_non_stop_follow_up_turn(
@@ -1364,5 +1385,45 @@ mod tests {
         let err = decode_prompt_bytes(&input).expect_err("invalid utf-8 should fail");
 
         assert_eq!(err, PromptDecodeError::InvalidUtf8 { valid_up_to: 0 });
+    }
+
+    #[test]
+    fn non_stop_follow_up_turn_starts_once_per_completed_turn() {
+        assert_eq!(
+            should_start_non_stop_follow_up_turn(
+                ModeKind::NonStop,
+                Some(&TurnCompleteReason::Completed),
+                Some("turn-1"),
+                None,
+            ),
+            true
+        );
+        assert_eq!(
+            should_start_non_stop_follow_up_turn(
+                ModeKind::NonStop,
+                Some(&TurnCompleteReason::Completed),
+                Some("turn-1"),
+                Some("turn-1"),
+            ),
+            false
+        );
+        assert_eq!(
+            should_start_non_stop_follow_up_turn(
+                ModeKind::NonStop,
+                Some(&TurnCompleteReason::Completed),
+                Some("turn-2"),
+                Some("turn-1"),
+            ),
+            true
+        );
+        assert_eq!(
+            should_start_non_stop_follow_up_turn(
+                ModeKind::NonStop,
+                Some(&TurnCompleteReason::NoMoreWork),
+                Some("turn-2"),
+                Some("turn-1"),
+            ),
+            false
+        );
     }
 }

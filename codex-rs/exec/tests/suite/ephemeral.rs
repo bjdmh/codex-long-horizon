@@ -427,7 +427,7 @@ async fn non_stop_resume_without_prompt_uses_checkpoint_goal_prompt() -> anyhow:
             responses::ev_response_created("resp-2"),
             responses::ev_assistant_message(
                 "msg-2",
-                "<await_user_input>still blocked in the test fixture.</await_user_input>",
+                "<await_user_input>I still need production credentials in the test fixture.</await_user_input>",
             ),
             responses::ev_completed("resp-2"),
         ]),
