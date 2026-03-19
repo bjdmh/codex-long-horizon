@@ -1498,7 +1498,8 @@ impl App {
         }
         self.chat_widget.set_queue_autosend_suppressed(false);
         if resume_restored_queue {
-            self.chat_widget.maybe_send_next_queued_input();
+            self.chat_widget
+                .restore_pending_input_to_composer_after_replay();
         }
         self.refresh_status_line();
     }
@@ -4073,22 +4074,25 @@ mod tests {
 
         app.replay_thread_snapshot(snapshot, true);
 
-        assert_eq!(app.chat_widget.composer_text_with_pending(), "draft prompt");
+        assert!(
+            app.chat_widget
+                .composer_text_with_pending()
+                .contains("draft prompt")
+        );
+        assert!(
+            app.chat_widget
+                .composer_text_with_pending()
+                .contains("queued follow-up")
+        );
         assert!(app.chat_widget.queued_user_message_texts().is_empty());
-        match next_user_turn_op(&mut new_op_rx) {
-            Op::UserTurn { items, .. } => assert_eq!(
-                items,
-                vec![UserInput::Text {
-                    text: "queued follow-up".to_string(),
-                    text_elements: Vec::new(),
-                }]
-            ),
-            other => panic!("expected queued follow-up submission, got {other:?}"),
-        }
+        assert!(
+            new_op_rx.try_recv().is_err(),
+            "replayed snapshot should not auto-submit restored queued follow-up"
+        );
     }
 
     #[tokio::test]
-    async fn replayed_turn_complete_submits_restored_queued_follow_up() {
+    async fn replayed_turn_complete_restores_queued_follow_up_to_composer() {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let thread_id = ThreadId::new();
         let session_configured = Event {
@@ -4157,16 +4161,15 @@ mod tests {
             true,
         );
 
-        match next_user_turn_op(&mut new_op_rx) {
-            Op::UserTurn { items, .. } => assert_eq!(
-                items,
-                vec![UserInput::Text {
-                    text: "queued follow-up".to_string(),
-                    text_elements: Vec::new(),
-                }]
-            ),
-            other => panic!("expected queued follow-up submission, got {other:?}"),
-        }
+        assert!(
+            new_op_rx.try_recv().is_err(),
+            "replayed turn completion should not auto-submit restored queued follow-up"
+        );
+        assert_eq!(
+            app.chat_widget.composer_text_with_pending(),
+            "queued follow-up"
+        );
+        assert!(app.chat_widget.queued_user_message_texts().is_empty());
     }
 
     #[tokio::test]
@@ -4412,7 +4415,11 @@ mod tests {
         );
         assert_eq!(
             app.chat_widget.queued_user_message_texts(),
-            vec!["queued follow-up".to_string()]
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            app.chat_widget.composer_text_with_pending(),
+            "queued follow-up"
         );
 
         app.chat_widget.handle_codex_event(Event {
@@ -4424,16 +4431,14 @@ mod tests {
             }),
         });
 
-        match next_user_turn_op(&mut new_op_rx) {
-            Op::UserTurn { items, .. } => assert_eq!(
-                items,
-                vec![UserInput::Text {
-                    text: "queued follow-up".to_string(),
-                    text_elements: Vec::new(),
-                }]
-            ),
-            other => panic!("expected queued follow-up submission, got {other:?}"),
-        }
+        assert!(
+            new_op_rx.try_recv().is_err(),
+            "live turn completion after replay should not auto-submit restored follow-up"
+        );
+        assert_eq!(
+            app.chat_widget.composer_text_with_pending(),
+            "queued follow-up"
+        );
     }
 
     #[tokio::test]

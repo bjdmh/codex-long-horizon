@@ -29,6 +29,9 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::hash::DefaultHasher;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -180,6 +183,8 @@ const PLAN_MODE_REASONING_SCOPE_TITLE: &str = "Apply reasoning change";
 const PLAN_MODE_REASONING_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode override";
 const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and Plan mode override";
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
+const AUTO_SUBMISSION_DEDUPE_WINDOW: Duration = Duration::from_secs(120);
+const MAX_RECENT_AUTO_SUBMISSION_FINGERPRINTS: usize = 32;
 
 /// Choose the keybinding used to edit the most-recently queued message.
 ///
@@ -639,6 +644,7 @@ pub(crate) struct ChatWidget {
     /// [`queued_message_edit_binding_for_terminal`] and propagated to
     /// `BottomPane` so the hint text matches the actual shortcut.
     queued_message_edit_binding: KeyBinding,
+    recent_auto_submissions: VecDeque<RecentAutoSubmission>,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,
     /// When `Some`, the user has pressed a quit shortcut and the second press
@@ -805,6 +811,18 @@ impl From<&str> for UserMessage {
 struct PendingSteer {
     user_message: UserMessage,
     compare_key: PendingSteerCompareKey,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RecentAutoSubmission {
+    fingerprint: u64,
+    submitted_at: Instant,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UserMessageSubmissionOrigin {
+    Explicit,
+    AutoQueue,
 }
 
 pub(crate) fn create_initial_user_message(
@@ -2159,6 +2177,14 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn restore_pending_input_to_composer_after_replay(&mut self) {
+        if let Some(combined) = self.drain_pending_messages_for_restore() {
+            self.restore_user_message_to_composer(combined);
+            self.refresh_pending_input_preview();
+            self.request_redraw();
+        }
+    }
+
     pub(crate) fn set_queue_autosend_suppressed(&mut self, suppressed: bool) {
         self.suppress_queue_autosend = suppressed;
     }
@@ -3176,6 +3202,7 @@ impl ChatWidget {
             queued_user_messages: VecDeque::new(),
             pending_steers: VecDeque::new(),
             queued_message_edit_binding,
+            recent_auto_submissions: VecDeque::new(),
             show_welcome_banner: is_first_run,
             startup_tooltip_override,
             suppress_session_configured_redraw: false,
@@ -3365,6 +3392,7 @@ impl ChatWidget {
             queued_user_messages: VecDeque::new(),
             pending_steers: VecDeque::new(),
             queued_message_edit_binding,
+            recent_auto_submissions: VecDeque::new(),
             show_welcome_banner: is_first_run,
             startup_tooltip_override,
             suppress_session_configured_redraw: false,
@@ -3538,6 +3566,7 @@ impl ChatWidget {
             queued_user_messages: VecDeque::new(),
             pending_steers: VecDeque::new(),
             queued_message_edit_binding,
+            recent_auto_submissions: VecDeque::new(),
             show_welcome_banner: false,
             startup_tooltip_override: None,
             suppress_session_configured_redraw: true,
@@ -4367,11 +4396,22 @@ impl ChatWidget {
             self.queued_user_messages.push_back(user_message);
             self.refresh_pending_input_preview();
         } else {
-            self.submit_user_message(user_message);
+            self.submit_user_message_with_origin(
+                user_message,
+                UserMessageSubmissionOrigin::Explicit,
+            );
         }
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
+        self.submit_user_message_with_origin(user_message, UserMessageSubmissionOrigin::Explicit);
+    }
+
+    fn submit_user_message_with_origin(
+        &mut self,
+        user_message: UserMessage,
+        origin: UserMessageSubmissionOrigin,
+    ) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
             self.queued_user_messages.push_front(user_message);
@@ -4381,6 +4421,20 @@ impl ChatWidget {
         if self.is_review_mode {
             self.queued_user_messages.push_back(user_message);
             self.refresh_pending_input_preview();
+            return;
+        }
+
+        let fingerprint = self.user_message_fingerprint(&user_message);
+        if origin == UserMessageSubmissionOrigin::AutoQueue
+            && self.is_recent_auto_submission_duplicate(fingerprint)
+        {
+            self.restore_user_message_to_composer(user_message);
+            self.add_info_message(
+                "Skipped an automatic replay of a very recent queued action; restored it to the composer instead.".to_string(),
+                None,
+            );
+            self.refresh_pending_input_preview();
+            self.request_redraw();
             return;
         }
 
@@ -4569,6 +4623,10 @@ impl ChatWidget {
 
         if !self.submit_op(op) {
             return;
+        }
+
+        if origin == UserMessageSubmissionOrigin::AutoQueue {
+            self.record_recent_auto_submission(fingerprint);
         }
 
         // Persist the text to cross-session message history.
@@ -5157,10 +5215,58 @@ impl ChatWidget {
             return;
         }
         if let Some(user_message) = self.queued_user_messages.pop_front() {
-            self.submit_user_message(user_message);
+            self.submit_user_message_with_origin(
+                user_message,
+                UserMessageSubmissionOrigin::AutoQueue,
+            );
         }
         // Update the list to reflect the remaining queued messages (if any).
         self.refresh_pending_input_preview();
+    }
+
+    fn user_message_fingerprint(&self, user_message: &UserMessage) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        user_message.text.hash(&mut hasher);
+        user_message
+            .local_images
+            .iter()
+            .for_each(|image| image.path.hash(&mut hasher));
+        user_message
+            .remote_image_urls
+            .iter()
+            .for_each(|url| url.hash(&mut hasher));
+        user_message.mention_bindings.iter().for_each(|binding| {
+            (binding.mention.as_str(), binding.path.as_str()).hash(&mut hasher)
+        });
+        hasher.finish()
+    }
+
+    fn prune_recent_auto_submissions(&mut self) {
+        let now = Instant::now();
+        while self.recent_auto_submissions.front().is_some_and(|entry| {
+            now.duration_since(entry.submitted_at) > AUTO_SUBMISSION_DEDUPE_WINDOW
+        }) {
+            self.recent_auto_submissions.pop_front();
+        }
+        while self.recent_auto_submissions.len() > MAX_RECENT_AUTO_SUBMISSION_FINGERPRINTS {
+            self.recent_auto_submissions.pop_front();
+        }
+    }
+
+    fn is_recent_auto_submission_duplicate(&mut self, fingerprint: u64) -> bool {
+        self.prune_recent_auto_submissions();
+        self.recent_auto_submissions
+            .iter()
+            .any(|entry| entry.fingerprint == fingerprint)
+    }
+
+    fn record_recent_auto_submission(&mut self, fingerprint: u64) {
+        self.prune_recent_auto_submissions();
+        self.recent_auto_submissions
+            .push_back(RecentAutoSubmission {
+                fingerprint,
+                submitted_at: Instant::now(),
+            });
     }
 
     /// Rebuild and update the bottom-pane pending-input preview.

@@ -1912,6 +1912,7 @@ async fn make_chatwidget_manual(
         queued_user_messages: VecDeque::new(),
         pending_steers: VecDeque::new(),
         queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
+        recent_auto_submissions: VecDeque::new(),
         suppress_session_configured_redraw: false,
         pending_notification: None,
         quit_shortcut_expires_at: None,
@@ -9930,6 +9931,35 @@ async fn enter_queues_user_messages_while_review_is_running() {
     assert!(chat.pending_steers.is_empty());
     assert_no_submit_op(&mut op_rx);
     assert!(drain_insert_history(&mut rx).is_empty());
+}
+
+#[tokio::test]
+async fn auto_queue_duplicate_is_restored_instead_of_resubmitted() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    let message = UserMessage::from("repeat follow-up".to_string());
+    chat.queued_user_messages.push_back(message.clone());
+    chat.maybe_send_next_queued_input();
+
+    match op_rx.try_recv().expect("first op") {
+        Op::UserTurn { .. } => {}
+        other => panic!("expected first queued follow-up submission, got {other:?}"),
+    }
+
+    chat.agent_turn_running = false;
+    chat.queued_user_messages.push_back(message);
+    chat.maybe_send_next_queued_input();
+
+    assert_no_submit_op(&mut op_rx);
+    assert_eq!(chat.composer_text_with_pending(), "repeat follow-up");
+    assert!(chat.queued_user_messages.is_empty());
+    let rendered = lines_to_single_string(
+        drain_insert_history(&mut rx)
+            .last()
+            .expect("info cell after duplicate suppression"),
+    );
+    assert!(rendered.contains("Skipped an automatic replay"));
 }
 
 #[tokio::test]
