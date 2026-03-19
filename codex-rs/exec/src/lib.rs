@@ -813,6 +813,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     // exit with a non-zero status for automation-friendly signaling.
     let mut error_seen = false;
     let mut shutdown_requested = false;
+    let mut last_non_stop_follow_up_turn_id: Option<String> = None;
     while let Some(envelope) = rx.recv().await {
         let ThreadEventEnvelope {
             thread_id,
@@ -864,18 +865,22 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         {
             current_live_turn_id = Some(event.turn_id.clone());
         }
-        let current_primary_turn_complete = if thread_id == primary_thread_id {
-            match &event.msg {
-                EventMsg::TurnComplete(event)
-                    if current_live_turn_id.as_deref() == Some(event.turn_id.as_str()) =>
-                {
-                    Some(event.completion_reason.clone())
+        let (current_primary_turn_complete, current_primary_completed_turn_id) =
+            if thread_id == primary_thread_id {
+                match &event.msg {
+                    EventMsg::TurnComplete(event)
+                        if current_live_turn_id.as_deref() == Some(event.turn_id.as_str()) =>
+                    {
+                        (
+                            Some(event.completion_reason.clone()),
+                            Some(event.turn_id.clone()),
+                        )
+                    }
+                    _ => (None, None),
                 }
-                _ => None,
-            }
-        } else {
-            None
-        };
+            } else {
+                (None, None)
+            };
         if thread_id == primary_thread_id
             && let EventMsg::TurnComplete(event) = &event.msg
             && current_live_turn_id.as_deref() != Some(event.turn_id.as_str())
@@ -889,9 +894,12 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         match shutdown {
             CodexStatus::Running => continue,
             CodexStatus::InitiateShutdown => {
-                if current_primary_turn_complete == Some(TurnCompleteReason::Completed)
-                    && config.initial_collaboration_mode == ModeKind::NonStop
-                {
+                if should_start_non_stop_follow_up_turn(
+                    config.initial_collaboration_mode,
+                    current_primary_turn_complete.as_ref(),
+                    current_primary_completed_turn_id.as_deref(),
+                    last_non_stop_follow_up_turn_id.as_deref(),
+                ) {
                     if let Some(_task_id) = maybe_submit_non_stop_follow_up_turn(
                         &config,
                         primary_thread_id,
@@ -901,6 +909,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     )
                     .await?
                     {
+                        last_non_stop_follow_up_turn_id = current_primary_completed_turn_id;
                         current_live_turn_id = None;
                         continue;
                     }
@@ -1090,6 +1099,18 @@ fn build_non_stop_supervisor_prompt(checkpoint: &NonStopCheckpoint) -> String {
         "\nOnly stop if you are blocked on information the user must provide and include <await_user_input>...</await_user_input>, or if the active goal is truly achieved and you include <goal_complete>...</goal_complete>.",
     );
     prompt
+}
+
+fn should_start_non_stop_follow_up_turn(
+    collaboration_mode: ModeKind,
+    completion_reason: Option<&TurnCompleteReason>,
+    completed_turn_id: Option<&str>,
+    last_followed_up_turn_id: Option<&str>,
+) -> bool {
+    collaboration_mode == ModeKind::NonStop
+        && completion_reason == Some(&TurnCompleteReason::Completed)
+        && completed_turn_id.is_some()
+        && completed_turn_id != last_followed_up_turn_id
 }
 
 fn non_stop_budget_summary(checkpoint: &NonStopCheckpoint) -> Option<String> {
@@ -1729,5 +1750,33 @@ mod tests {
         let prompt_without_flag = build_non_stop_supervisor_prompt(&checkpoint);
         assert!(!prompt_without_flag.contains("Pending innovation backlog"));
         assert!(!prompt_without_flag.contains("Self-directed innovation is allowed"));
+    }
+
+    #[test]
+    fn non_stop_follow_up_turn_starts_once_per_completed_turn() {
+        assert!(should_start_non_stop_follow_up_turn(
+            ModeKind::NonStop,
+            Some(&TurnCompleteReason::Completed),
+            Some("turn-1"),
+            None,
+        ));
+        assert!(!should_start_non_stop_follow_up_turn(
+            ModeKind::NonStop,
+            Some(&TurnCompleteReason::Completed),
+            Some("turn-1"),
+            Some("turn-1"),
+        ));
+        assert!(should_start_non_stop_follow_up_turn(
+            ModeKind::NonStop,
+            Some(&TurnCompleteReason::Completed),
+            Some("turn-2"),
+            Some("turn-1"),
+        ));
+        assert!(!should_start_non_stop_follow_up_turn(
+            ModeKind::NonStop,
+            Some(&TurnCompleteReason::NoMoreWork),
+            Some("turn-2"),
+            Some("turn-1"),
+        ));
     }
 }
