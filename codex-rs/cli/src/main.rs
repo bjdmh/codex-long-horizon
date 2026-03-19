@@ -59,7 +59,7 @@ use codex_core::terminal::TerminalName;
 #[clap(
     name = "codex-cli",
     author,
-    version = "0.115.5",
+    version = "0.115.6",
     // If a sub‑command is given, ignore requirements of the default args.
     subcommand_negates_reqs = true,
     // The executable is sometimes invoked via a platform‑specific name like
