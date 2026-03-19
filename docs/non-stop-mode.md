@@ -106,6 +106,8 @@ Current implementation:
 - a new user message resets the budget timer; resume-without-new-input keeps the existing timer
 - bounded self-directed innovation is gated by the explicit CLI flag `--self-directed-innovation`
   and only works when `Non-stop` is enabled via `--non-stop` or config
+- both `codex exec --non-stop --self-directed-innovation ...` and interactive
+  `codex --non-stop --self-directed-innovation` are supported
 - self-directed innovation is recorded via `<innovation_candidate>...</innovation_candidate>`
   before execution, then handed to the next `Non-stop` turn with `<task_complete>`
 - supervisor prompts surface remaining budget, pending innovation items, and lightweight

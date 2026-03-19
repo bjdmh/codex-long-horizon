@@ -59,7 +59,7 @@ use codex_core::terminal::TerminalName;
 #[clap(
     name = "codex-cli",
     author,
-    version = "0.115.3",
+    version = "0.115.4",
     // If a sub‑command is given, ignore requirements of the default args.
     subcommand_negates_reqs = true,
     // The executable is sometimes invoked via a platform‑specific name like
@@ -1054,6 +1054,9 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
     if subcommand_cli.non_stop {
         interactive.non_stop = true;
     }
+    if subcommand_cli.self_directed_innovation {
+        interactive.self_directed_innovation = true;
+    }
     if subcommand_cli.oss {
         interactive.oss = true;
     }
@@ -1212,6 +1215,21 @@ mod tests {
             .expect("parse should succeed");
 
         assert!(cli.interactive.non_stop);
+        assert_eq!(cli.interactive.prompt.as_deref(), Some("go"));
+    }
+
+    #[test]
+    fn root_cli_parses_self_directed_innovation_for_interactive_mode() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "--non-stop",
+            "--self-directed-innovation",
+            "go",
+        ])
+        .expect("parse should succeed");
+
+        assert!(cli.interactive.non_stop);
+        assert!(cli.interactive.self_directed_innovation);
         assert_eq!(cli.interactive.prompt.as_deref(), Some("go"));
     }
 
@@ -1413,6 +1431,21 @@ mod tests {
     fn resume_merges_non_stop_flag() {
         let interactive = finalize_resume_from_args(["codex", "resume", "--non-stop"].as_ref());
         assert!(interactive.non_stop);
+    }
+
+    #[test]
+    fn resume_merges_self_directed_innovation_flag() {
+        let interactive = finalize_resume_from_args(
+            [
+                "codex",
+                "resume",
+                "--non-stop",
+                "--self-directed-innovation",
+            ]
+            .as_ref(),
+        );
+        assert!(interactive.non_stop);
+        assert!(interactive.self_directed_innovation);
     }
 
     #[test]

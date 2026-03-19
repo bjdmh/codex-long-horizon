@@ -36,6 +36,7 @@ use codex_core::terminal::Multiplexer;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::AltScreenMode;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::AskForApproval;
@@ -239,6 +240,8 @@ pub async fn run_main(mut cli: Cli, arg0_paths: Arg0DispatchPaths) -> std::io::R
         }
     }
 
+    let self_directed_innovation_instructions = "Bounded self-directed innovation is enabled for this Non-stop run. You may only use it when it clearly stays within the active goal, fits the remaining time budget, and does not create obvious high-risk side effects. Before executing any self-directed innovation, first record it with <innovation_candidate>{\"title\":\"...\",\"rationale\":\"...\",\"relevance\":\"...\",\"risk\":\"low|medium|high\",\"estimated_duration\":\"30m\"}</innovation_candidate> and then hand off with <task_complete>...</task_complete>.";
+
     let (sandbox_mode, approval_policy) = if cli.full_auto {
         (
             Some(SandboxMode::WorkspaceWrite),
@@ -394,12 +397,22 @@ pub async fn run_main(mut cli: Cli, arg0_paths: Arg0DispatchPaths) -> std::io::R
         ..Default::default()
     };
 
-    let config = load_config_or_exit(
+    let mut config = load_config_or_exit(
         cli_kv_overrides.clone(),
         overrides.clone(),
         cloud_requirements.clone(),
     )
     .await;
+
+    if cli.self_directed_innovation && config.initial_collaboration_mode != ModeKind::NonStop {
+        eprintln!(
+            "--self-directed-innovation requires Non-stop mode. Pass --non-stop or set initial_collaboration_mode=\"non_stop\" in config."
+        );
+        std::process::exit(1);
+    }
+    if cli.self_directed_innovation {
+        config.developer_instructions = Some(self_directed_innovation_instructions.to_string());
+    }
 
     #[allow(clippy::print_stderr)]
     match check_execpolicy_for_warnings(&config.config_layer_stack).await {

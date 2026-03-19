@@ -7508,7 +7508,36 @@ impl ChatWidget {
         if let Some(model_override) = model_override {
             mask.model = Some(model_override.to_string());
         }
+        Self::apply_developer_instruction_override_to_mask(config, &mut mask);
         Some(mask)
+    }
+
+    fn apply_developer_instruction_override_to_mask(
+        config: &Config,
+        mask: &mut CollaborationModeMask,
+    ) {
+        if mask.mode != Some(ModeKind::NonStop) {
+            return;
+        }
+        let Some(extra_instructions) = config
+            .developer_instructions
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+        else {
+            return;
+        };
+        let merged = match mask
+            .developer_instructions
+            .clone()
+            .flatten()
+            .map(|instructions| instructions.trim().to_string())
+            .filter(|instructions| !instructions.is_empty())
+        {
+            Some(base) => format!("{base}\n\n{extra_instructions}"),
+            None => extra_instructions.to_string(),
+        };
+        mask.developer_instructions = Some(Some(merged));
     }
 
     fn active_mode_kind(&self) -> ModeKind {
@@ -7631,6 +7660,7 @@ impl ChatWidget {
         {
             mask.reasoning_effort = Some(Some(effort));
         }
+        Self::apply_developer_instruction_override_to_mask(&self.config, &mut mask);
         self.active_collaboration_mask = Some(mask);
         self.update_collaboration_mode_indicator();
         self.refresh_model_display();

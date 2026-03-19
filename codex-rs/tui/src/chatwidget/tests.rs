@@ -133,6 +133,31 @@ async fn test_config() -> Config {
         .expect("config")
 }
 
+#[tokio::test]
+async fn initial_non_stop_mask_appends_config_developer_instructions() {
+    let mut cfg = test_config().await;
+    cfg.initial_collaboration_mode = ModeKind::NonStop;
+    cfg.developer_instructions = Some("bounded innovation enabled".to_string());
+    let auth_manager =
+        codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
+    let models_manager = ModelsManager::new(
+        cfg.codex_home.clone(),
+        auth_manager,
+        None,
+        CollaborationModesConfig::default(),
+    );
+
+    let mask = ChatWidget::initial_collaboration_mask(&cfg, &models_manager, None).expect("mask");
+
+    let developer_instructions = mask
+        .developer_instructions
+        .as_ref()
+        .and_then(|instructions| instructions.as_ref())
+        .expect("developer instructions");
+    assert!(developer_instructions.contains("Collaboration Style: Non-stop"));
+    assert!(developer_instructions.contains("bounded innovation enabled"));
+}
+
 fn invalid_value(candidate: impl Into<String>, allowed: impl Into<String>) -> ConstraintError {
     ConstraintError::InvalidValue {
         field_name: "<unknown>",

@@ -71,6 +71,10 @@ pub struct Cli {
     #[arg(long = "non-stop", default_value_t = false)]
     pub non_stop: bool,
 
+    /// Enable bounded self-directed innovation in Non-stop mode.
+    #[arg(long = "self-directed-innovation", default_value_t = false)]
+    pub self_directed_innovation: bool,
+
     /// Select the sandbox policy to use when executing model-generated shell
     /// commands.
     #[arg(long = "sandbox", short = 's')]
@@ -116,4 +120,23 @@ pub struct Cli {
 
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_self_directed_innovation_flag() {
+        let cli = Cli::parse_from([
+            "codex-tui",
+            "--non-stop",
+            "--self-directed-innovation",
+            "keep going",
+        ]);
+
+        assert!(cli.non_stop);
+        assert!(cli.self_directed_innovation);
+        assert_eq!(cli.prompt.as_deref(), Some("keep going"));
+    }
 }
