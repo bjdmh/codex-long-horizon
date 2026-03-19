@@ -21,8 +21,30 @@ The default outcome after a response finishes is therefore:
 - continue if there is uncertainty but a small validating action is available
 - continue if the current turn is done but the user's goal still needs further
   monitoring, verification, or retries
+- continue with bounded self-directed innovation only after it is recorded,
+  checked for scope / time budget / risk, and still meaningfully advances the goal
 - stop only for hard blockers or after an explicit "the user's requested
   outcome is actually achieved" conclusion
+
+### Time budget
+
+- `Non-stop` runs carry a wall-clock time budget
+- the default budget is 48 hours when the user does not specify one
+- if the user explicitly provides a task duration, that duration overrides the default
+- the timer resets only when the user sends new input; resume-without-new-input
+  keeps the existing timer running
+
+### Innovation backlog
+
+- bounded self-directed innovation is opt-in via `--self-directed-innovation`
+- enabling that flag without `Non-stop` is invalid; `Non-stop` may come from
+  `--non-stop` or from config
+- self-directed innovation must be recorded first with
+  `<innovation_candidate>{"title":"...","rationale":"...","relevance":"...","risk":"low|medium|high","estimated_duration":"30m"}</innovation_candidate>`
+- after recording the candidate, end the turn with `<task_complete>` so the next
+  Non-stop turn can review or execute it deliberately
+- runtime checks should reject only clearly high-risk or over-budget innovation
+  candidates; low and medium risk work remains allowed when it is in scope
 
 ### Stop conditions
 

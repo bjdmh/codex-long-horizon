@@ -99,6 +99,18 @@ Autonomous innovation should be explicit and bounded:
 - require budget / risk / relevance checks before self-started work
 - surface innovation actions clearly in status / logs / artifacts
 
+Current implementation:
+
+- `Non-stop` checkpoints now persist a time budget window and an innovation backlog
+- the default budget is 48 hours unless the user explicitly gives a different duration
+- a new user message resets the budget timer; resume-without-new-input keeps the existing timer
+- bounded self-directed innovation is gated by the explicit CLI flag `--self-directed-innovation`
+  and only works when `Non-stop` is enabled via `--non-stop` or config
+- self-directed innovation is recorded via `<innovation_candidate>...</innovation_candidate>`
+  before execution, then handed to the next `Non-stop` turn with `<task_complete>`
+- supervisor prompts surface remaining budget, pending innovation items, and lightweight
+  risk checks that block only obviously high-risk or over-budget innovation ideas
+
 ## Initial implementation plan
 
 1. Add `Non-stop` mode to protocol, presets, docs, and UI mode lists.

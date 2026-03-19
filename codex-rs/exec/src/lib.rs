@@ -18,10 +18,14 @@ use codex_cloud_requirements::cloud_requirements_loader;
 use codex_core::AuthManager;
 use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_core::NewThread;
+use codex_core::NonStopBudgetSource;
 use codex_core::NonStopCheckpoint;
 use codex_core::NonStopCheckpointControlSignal;
 use codex_core::NonStopCheckpointStatus;
+use codex_core::NonStopInnovationRisk;
+use codex_core::NonStopInnovationStatus;
 use codex_core::OLLAMA_OSS_PROVIDER_ID;
+use codex_core::RegisterNonStopSessionOptions;
 use codex_core::ThreadManager;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::check_execpolicy_for_warnings;
@@ -67,6 +71,8 @@ use std::io::IsTerminal;
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 use supports_color::Stream;
 use tokio::sync::Mutex;
 use tracing::Instrument;
@@ -91,6 +97,17 @@ use codex_core::find_thread_path_by_name_str;
 const DEFAULT_ANALYTICS_ENABLED: bool = true;
 const NON_STOP_DEFAULT_MODEL: &str = "gpt-5.4";
 const DEFAULT_NON_STOP_RESUME_PROMPT: &str = "Resume Non-stop execution toward the active goal from the existing thread state. Review the thread, avoid redoing finished work, and continue with the next highest-leverage concrete task.";
+
+fn self_directed_innovation_requires_non_stop_error() -> &'static str {
+    "--self-directed-innovation requires Non-stop mode. Pass --non-stop or set initial_collaboration_mode=\"non_stop\" in config."
+}
+
+fn current_unix_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or_default()
+}
 
 enum InitialOperation {
     UserTurn {
@@ -124,6 +141,7 @@ struct ExecRunArgs {
     output_schema_path: Option<PathBuf>,
     prompt: Option<String>,
     skip_git_repo_check: bool,
+    self_directed_innovation: bool,
     stderr_with_ansi: bool,
 }
 
@@ -160,6 +178,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         oss_provider,
         config_profile,
         non_stop,
+        self_directed_innovation,
         full_auto,
         dangerously_bypass_approvals_and_sandbox,
         cwd,
@@ -361,6 +380,11 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         .build()
         .await?;
 
+    if self_directed_innovation && config.initial_collaboration_mode != ModeKind::NonStop {
+        eprintln!("{}", self_directed_innovation_requires_non_stop_error());
+        std::process::exit(1);
+    }
+
     #[allow(clippy::print_stderr)]
     match check_execpolicy_for_warnings(&config.config_layer_stack).await {
         Ok(None) => {}
@@ -427,6 +451,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         output_schema_path,
         prompt,
         skip_git_repo_check,
+        self_directed_innovation,
         stderr_with_ansi,
     })
     .instrument(exec_span)
@@ -448,6 +473,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         output_schema_path,
         prompt,
         skip_git_repo_check,
+        self_directed_innovation,
         stderr_with_ansi,
     } = args;
 
@@ -521,13 +547,24 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         .get_default_model(&config.model, RefreshStrategy::OnlineIfUncached)
         .await;
     let output_schema = load_output_schema(output_schema_path.clone());
+    let non_stop_developer_instructions = if self_directed_innovation {
+        Some(
+            "Bounded self-directed innovation is enabled for this Non-stop run. You may only use it when it clearly stays within the active goal, fits the remaining time budget, and does not create obvious high-risk side effects. Before executing any self-directed innovation, first record it with <innovation_candidate>{\"title\":\"...\",\"rationale\":\"...\",\"relevance\":\"...\",\"risk\":\"low|medium|high\",\"estimated_duration\":\"30m\"}</innovation_candidate> and then hand off with <task_complete>...</task_complete>."
+                .to_string(),
+        )
+    } else {
+        Some(
+            "Self-directed innovation is disabled for this run unless the user explicitly enables it with the matching CLI flag. Keep working only on tasks that are directly requested or clearly implied by the active goal."
+                .to_string(),
+        )
+    };
     let requested_collaboration_mode = (config.initial_collaboration_mode == ModeKind::NonStop)
         .then_some(CollaborationMode {
             mode: ModeKind::NonStop,
             settings: Settings {
                 model: default_model.clone(),
                 reasoning_effort: default_effort,
-                developer_instructions: None,
+                developer_instructions: non_stop_developer_instructions,
             },
         });
     let turn_submit_defaults = TurnSubmitDefaults {
@@ -564,12 +601,21 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let primary_thread_id_for_span = primary_thread_id.to_string();
     exec_span.record("thread.id", primary_thread_id_for_span.as_str());
 
-    let (initial_operation, prompt_summary, non_stop_goal_prompt) = match (command, prompt, images)
-    {
+    let (
+        initial_operation,
+        prompt_summary,
+        non_stop_goal_prompt,
+        reset_non_stop_budget_from_user_input,
+    ) = match (command, prompt, images) {
         (Some(ExecCommand::Review(review_cli)), _, _) => {
             let review_request = build_review_request(review_cli)?;
             let summary = codex_core::review_prompts::user_facing_hint(&review_request.target);
-            (InitialOperation::Review { review_request }, summary, None)
+            (
+                InitialOperation::Review { review_request },
+                summary,
+                None,
+                false,
+            )
         }
         (Some(ExecCommand::Resume(args)), root_prompt, imgs) => {
             let prompt_arg = args
@@ -593,6 +639,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             } else {
                 None
             };
+            let reset_budget_from_user_input = prompt_arg.is_some();
             let (prompt_text, goal_prompt) = match prompt_arg {
                 Some(prompt) => {
                     let prompt_text = resolve_prompt(Some(prompt));
@@ -629,6 +676,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 },
                 prompt_text,
                 goal_prompt,
+                reset_budget_from_user_input,
             )
         }
         (None, root_prompt, imgs) => {
@@ -649,6 +697,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 },
                 prompt_text.clone(),
                 Some(prompt_text),
+                true,
             )
         }
     };
@@ -663,7 +712,11 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             session_configured.model.as_str(),
             session_configured.cwd.as_path(),
             SessionSource::Exec,
-            non_stop_goal_prompt,
+            RegisterNonStopSessionOptions {
+                goal_prompt: non_stop_goal_prompt,
+                reset_budget_from_user_input: reset_non_stop_budget_from_user_input,
+                self_directed_innovation_enabled: self_directed_innovation,
+            },
         )
         .await;
     }
@@ -981,6 +1034,9 @@ fn build_non_stop_supervisor_prompt(checkpoint: &NonStopCheckpoint) -> String {
     let mut prompt = format!(
         "Resume Non-stop execution toward the active goal.\nGoal: {goal}\nReview the existing thread state, avoid redoing finished work, and immediately choose the next highest-leverage concrete task. Treat the goal as still incomplete unless you can now verify that the user's requested outcome is actually achieved."
     );
+    if let Some(budget_summary) = non_stop_budget_summary(checkpoint) {
+        prompt.push_str(&format!("\nTime budget: {budget_summary}"));
+    }
     match checkpoint.status {
         NonStopCheckpointStatus::TurnComplete => {}
         NonStopCheckpointStatus::TurnAborted | NonStopCheckpointStatus::Error => {
@@ -1006,6 +1062,18 @@ fn build_non_stop_supervisor_prompt(checkpoint: &NonStopCheckpoint) -> String {
             "\nMost recent agent summary: {last_agent_message}"
         ));
     }
+    if checkpoint.self_directed_innovation_enabled
+        && let Some(innovation_summary) = non_stop_pending_innovation_summary(checkpoint)
+    {
+        prompt.push_str(&format!(
+            "\nPending innovation backlog:\n{innovation_summary}"
+        ));
+    }
+    if checkpoint.self_directed_innovation_enabled && non_stop_has_blocked_innovation(checkpoint) {
+        prompt.push_str(
+            "\nAt least one pending innovation candidate is currently too risky or too large for the remaining budget. Do not execute those items unchanged; either reject them explicitly in your reasoning and choose a safer in-scope action, or record a smaller safer innovation candidate first.",
+        );
+    }
     if checkpoint.last_assistant_control_signal
         == Some(NonStopCheckpointControlSignal::TaskComplete)
     {
@@ -1013,10 +1081,116 @@ fn build_non_stop_supervisor_prompt(checkpoint: &NonStopCheckpoint) -> String {
             "\nThe previous turn ended with <task_complete>, which in Non-stop means the turn finished a concrete step but the overall goal still remains active. Keep monitoring or advancing the goal until it is actually satisfied.",
         );
     }
+    if checkpoint.self_directed_innovation_enabled {
+        prompt.push_str(
+            "\nSelf-directed innovation is allowed only when it remains clearly inside the active goal, fits the remaining time budget, and has no obvious high-risk side effects. Before executing self-directed innovation, first record it with <innovation_candidate>{\"title\":\"...\",\"rationale\":\"...\",\"relevance\":\"...\",\"risk\":\"low|medium|high\",\"estimated_duration\":\"30m\"}</innovation_candidate> and then hand off with <task_complete>...</task_complete> so the next Non-stop turn can review it.",
+        );
+    }
     prompt.push_str(
         "\nOnly stop if you are blocked on information the user must provide and include <await_user_input>...</await_user_input>, or if the active goal is truly achieved and you include <goal_complete>...</goal_complete>.",
     );
     prompt
+}
+
+fn non_stop_budget_summary(checkpoint: &NonStopCheckpoint) -> Option<String> {
+    let budget = checkpoint.budget_window.as_ref()?;
+    let remaining_secs = budget.deadline_at.saturating_sub(current_unix_timestamp());
+    let total = format_non_stop_duration(budget.duration_secs);
+    let remaining = format_non_stop_duration(remaining_secs.max(0));
+    let source = match budget.source {
+        NonStopBudgetSource::Default48Hours => "default 48-hour budget",
+        NonStopBudgetSource::UserPrompt => "user-provided budget",
+    };
+    Some(format!(
+        "{remaining} remaining out of {total} ({source}); the timer resets only when the user sends new input."
+    ))
+}
+
+fn non_stop_pending_innovation_summary(checkpoint: &NonStopCheckpoint) -> Option<String> {
+    let mut lines = checkpoint
+        .innovation_backlog
+        .iter()
+        .filter(|candidate| candidate.status == NonStopInnovationStatus::Proposed)
+        .map(|candidate| {
+            let estimate = candidate
+                .estimated_duration_secs
+                .map(format_non_stop_duration)
+                .unwrap_or_else(|| "unknown duration".to_string());
+            let rationale = candidate
+                .rationale
+                .as_deref()
+                .filter(|text| !text.is_empty())
+                .unwrap_or("no rationale recorded");
+            format!(
+                "- {} (risk: {}, estimate: {}, rationale: {})",
+                candidate.title,
+                non_stop_risk_label(candidate.risk),
+                estimate,
+                rationale
+            )
+        })
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.drain(..).collect::<Vec<_>>().join("\n"))
+    }
+}
+
+fn non_stop_risk_label(risk: NonStopInnovationRisk) -> &'static str {
+    match risk {
+        NonStopInnovationRisk::Unknown => "unknown",
+        NonStopInnovationRisk::Low => "low",
+        NonStopInnovationRisk::Medium => "medium",
+        NonStopInnovationRisk::High => "high",
+        NonStopInnovationRisk::Critical => "critical",
+    }
+}
+
+fn format_non_stop_duration(seconds: i64) -> String {
+    if seconds >= 24 * 60 * 60 {
+        format!("{}h", seconds / (60 * 60))
+    } else if seconds >= 60 * 60 {
+        let hours = seconds / (60 * 60);
+        let minutes = (seconds % (60 * 60)) / 60;
+        if minutes == 0 {
+            format!("{hours}h")
+        } else {
+            format!("{hours}h {minutes}m")
+        }
+    } else if seconds >= 60 {
+        format!("{}m", seconds / 60)
+    } else {
+        format!("{seconds}s")
+    }
+}
+
+fn non_stop_budget_is_exhausted(checkpoint: &NonStopCheckpoint) -> bool {
+    checkpoint
+        .budget_window
+        .as_ref()
+        .is_some_and(|budget| current_unix_timestamp() >= budget.deadline_at)
+}
+
+fn non_stop_has_blocked_innovation(checkpoint: &NonStopCheckpoint) -> bool {
+    if !checkpoint.self_directed_innovation_enabled {
+        return false;
+    }
+    checkpoint.innovation_backlog.iter().any(|candidate| {
+        candidate.status == NonStopInnovationStatus::Proposed
+            && (matches!(
+                candidate.risk,
+                NonStopInnovationRisk::High | NonStopInnovationRisk::Critical
+            ) || candidate
+                .estimated_duration_secs
+                .zip(
+                    checkpoint
+                        .budget_window
+                        .as_ref()
+                        .map(|budget| budget.deadline_at.saturating_sub(current_unix_timestamp())),
+                )
+                .is_some_and(|(estimate, remaining)| estimate > remaining.max(0)))
+    })
 }
 
 fn read_latest_non_stop_checkpoint(codex_home: &std::path::Path) -> Option<NonStopCheckpoint> {
@@ -1060,6 +1234,19 @@ async fn maybe_submit_non_stop_follow_up_turn(
             "skipping non-stop follow-up because the completed turn produced no assistant output"
         );
         return Ok(None);
+    }
+    if non_stop_budget_is_exhausted(&checkpoint) {
+        info!(
+            thread_id = %thread_id,
+            "non-stop follow-up stopped because the active time budget is exhausted"
+        );
+        return Ok(None);
+    }
+    if non_stop_has_blocked_innovation(&checkpoint) {
+        info!(
+            thread_id = %thread_id,
+            "non-stop follow-up found a blocked innovation candidate; the next prompt will steer away from it"
+        );
     }
 
     let prompt = build_non_stop_supervisor_prompt(&checkpoint);
@@ -1452,6 +1639,10 @@ mod tests {
             goal_prompt: Some(goal_prompt.to_string()),
             last_agent_message: Some("done".to_string()),
             last_assistant_control_signal: Some(NonStopCheckpointControlSignal::TaskComplete),
+            last_user_input_at: Some(updated_at - 10),
+            budget_window: None,
+            innovation_backlog: Vec::new(),
+            self_directed_innovation_enabled: false,
         }
     }
 
@@ -1498,5 +1689,45 @@ mod tests {
         let latest = read_latest_non_stop_checkpoint(dir.path()).expect("latest checkpoint");
 
         assert_eq!(latest.goal_prompt.as_deref(), Some("valid goal"));
+    }
+
+    #[test]
+    fn non_stop_supervisor_prompt_surfaces_innovation_only_when_enabled() {
+        let mut checkpoint = test_checkpoint(
+            "019cff45-7090-7752-a34a-d93c178b7623",
+            40,
+            "watch the rollout for 2 hours",
+        );
+        checkpoint.self_directed_innovation_enabled = true;
+        let now = current_unix_timestamp();
+        checkpoint.budget_window = Some(codex_core::NonStopBudgetWindow {
+            started_at: now,
+            duration_secs: 2 * 60 * 60,
+            deadline_at: now + 2 * 60 * 60,
+            source: NonStopBudgetSource::UserPrompt,
+        });
+        checkpoint
+            .innovation_backlog
+            .push(codex_core::NonStopInnovationTask {
+                id: "innovation-1".to_string(),
+                title: "Add flaky-test detector".to_string(),
+                rationale: Some("Tightens follow-through".to_string()),
+                relevance: Some("Same goal".to_string()),
+                estimated_duration_secs: Some(20 * 60),
+                risk: NonStopInnovationRisk::Medium,
+                status: NonStopInnovationStatus::Proposed,
+                proposed_at: 40,
+                source_turn_id: Some("turn-1".to_string()),
+                rejection_reason: None,
+            });
+
+        let prompt = build_non_stop_supervisor_prompt(&checkpoint);
+        assert!(prompt.contains("Pending innovation backlog"));
+        assert!(prompt.contains("remaining out of 2h"));
+
+        checkpoint.self_directed_innovation_enabled = false;
+        let prompt_without_flag = build_non_stop_supervisor_prompt(&checkpoint);
+        assert!(!prompt_without_flag.contains("Pending innovation backlog"));
+        assert!(!prompt_without_flag.contains("Self-directed innovation is allowed"));
     }
 }

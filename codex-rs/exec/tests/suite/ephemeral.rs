@@ -416,6 +416,106 @@ async fn non_stop_task_complete_starts_follow_up_turn_until_goal_complete() -> a
     Ok(())
 }
 
+#[test]
+fn self_directed_innovation_requires_non_stop() -> anyhow::Result<()> {
+    let test = test_codex_exec();
+
+    let assert = test
+        .cmd()
+        .arg("--skip-git-repo-check")
+        .arg("--self-directed-innovation")
+        .arg("do work")
+        .assert()
+        .code(1);
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(
+        stderr.contains("--self-directed-innovation requires Non-stop mode"),
+        "unexpected stderr: {stderr}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn self_directed_innovation_records_backlog_before_follow_up() -> anyhow::Result<()> {
+    let test = test_codex_exec();
+    let server = responses::start_mock_server().await;
+    let requests = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_assistant_message(
+                    "msg-1",
+                    "I found a useful adjacent improvement.\n<innovation_candidate>{\"title\":\"Add a flaky-test detector\",\"rationale\":\"Improve follow-through while the user goal is active\",\"relevance\":\"Keeps the active goal moving\",\"risk\":\"medium\",\"estimated_duration\":\"20m\"}</innovation_candidate>\n<task_complete>Handing off the bounded innovation proposal.</task_complete>",
+                ),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-2"),
+                responses::ev_assistant_message(
+                    "msg-2",
+                    "<goal_complete>Innovation and primary goal are both complete.</goal_complete>",
+                ),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.cmd_with_server(&server)
+        .arg("--skip-git-repo-check")
+        .arg("--non-stop")
+        .arg("--self-directed-innovation")
+        .arg("keep improving the flaky CI workflow for 2 hours")
+        .assert()
+        .code(0);
+
+    let all_requests = requests.requests();
+    assert_eq!(all_requests.len(), 2);
+    assert!(
+        all_requests[1].body_contains_text("Pending innovation backlog"),
+        "expected follow-up request to include innovation backlog, got: {:?}",
+        all_requests[1].body_json()
+    );
+    assert!(
+        all_requests[1].body_contains_text("Add a flaky-test detector"),
+        "expected follow-up request to include innovation title, got: {:?}",
+        all_requests[1].body_json()
+    );
+
+    let thread_id = extract_conversation_id(
+        &find_session_file_containing_marker(
+            &test.home_path().join("sessions"),
+            "keep improving the flaky CI workflow for 2 hours",
+        )
+        .expect("session file"),
+    );
+    let thread_id =
+        codex_protocol::ThreadId::from_string(&thread_id).expect("parse checkpoint thread id");
+    let checkpoint: NonStopCheckpoint = serde_json::from_str(
+        &std::fs::read_to_string(non_stop_checkpoint_path(test.home_path(), thread_id))
+            .expect("read checkpoint"),
+    )
+    .expect("parse checkpoint");
+    assert!(checkpoint.self_directed_innovation_enabled);
+    assert_eq!(
+        checkpoint
+            .budget_window
+            .as_ref()
+            .map(|budget| budget.duration_secs),
+        Some(2 * 60 * 60)
+    );
+    assert!(
+        checkpoint
+            .innovation_backlog
+            .iter()
+            .any(|candidate| candidate.title == "Add a flaky-test detector")
+    );
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn non_stop_resume_without_prompt_uses_checkpoint_goal_prompt() -> anyhow::Result<()> {
     let test = test_codex_exec();

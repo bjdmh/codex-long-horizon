@@ -48,6 +48,14 @@ pub struct Cli {
     #[arg(long = "non-stop", default_value_t = false, global = true)]
     pub non_stop: bool,
 
+    /// Enable bounded self-directed innovation in Non-stop mode.
+    #[arg(
+        long = "self-directed-innovation",
+        default_value_t = false,
+        global = true
+    )]
+    pub self_directed_innovation: bool,
+
     /// Convenience alias for low-friction sandboxed automatic execution (-a on-request, --sandbox workspace-write).
     #[arg(long = "full-auto", default_value_t = false, global = true)]
     pub full_auto: bool,
@@ -331,5 +339,19 @@ mod tests {
 
         assert!(cli.non_stop);
         assert_eq!(cli.prompt.as_deref(), Some("keep going"));
+    }
+
+    #[test]
+    fn parses_self_directed_innovation_flag() {
+        let cli = Cli::parse_from([
+            "codex-exec",
+            "--non-stop",
+            "--self-directed-innovation",
+            "--skip-git-repo-check",
+            "keep going",
+        ]);
+
+        assert!(cli.non_stop);
+        assert!(cli.self_directed_innovation);
     }
 }
