@@ -19,6 +19,7 @@ use codex_core::AuthManager;
 use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_core::NewThread;
 use codex_core::NonStopCheckpoint;
+use codex_core::NonStopCheckpointControlSignal;
 use codex_core::NonStopCheckpointStatus;
 use codex_core::OLLAMA_OSS_PROVIDER_ID;
 use codex_core::ThreadManager;
@@ -978,7 +979,7 @@ fn build_non_stop_supervisor_prompt(checkpoint: &NonStopCheckpoint) -> String {
         "Continue making progress on the current non-stop goal from the existing thread state.",
     );
     let mut prompt = format!(
-        "Resume Non-stop execution toward the active goal.\nGoal: {goal}\nReview the existing thread state, avoid redoing finished work, and immediately choose the next highest-leverage concrete task."
+        "Resume Non-stop execution toward the active goal.\nGoal: {goal}\nReview the existing thread state, avoid redoing finished work, and immediately choose the next highest-leverage concrete task. Treat the goal as still incomplete unless you can now verify that the user's requested outcome is actually achieved."
     );
     match checkpoint.status {
         NonStopCheckpointStatus::TurnComplete => {}
@@ -1005,8 +1006,15 @@ fn build_non_stop_supervisor_prompt(checkpoint: &NonStopCheckpoint) -> String {
             "\nMost recent agent summary: {last_agent_message}"
         ));
     }
+    if checkpoint.last_assistant_control_signal
+        == Some(NonStopCheckpointControlSignal::TaskComplete)
+    {
+        prompt.push_str(
+            "\nThe previous turn ended with <task_complete>, which in Non-stop means the turn finished a concrete step but the overall goal still remains active. Keep monitoring or advancing the goal until it is actually satisfied.",
+        );
+    }
     prompt.push_str(
-        "\nOnly stop if you are blocked on information the user must provide, and then include <await_user_input>...</await_user_input>.",
+        "\nOnly stop if you are blocked on information the user must provide and include <await_user_input>...</await_user_input>, or if the active goal is truly achieved and you include <goal_complete>...</goal_complete>.",
     );
     prompt
 }

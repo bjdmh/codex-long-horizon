@@ -30,8 +30,7 @@ See also:
 - `Non-stop`: keep searching for the next useful step instead of stopping at the
   first local completion point.
 - `Non-stop` stops automatically only when required human input is missing, or
-  when the model has actively searched for the next step and found nothing
-  meaningful left to do.
+  when the user's requested outcome is actually achieved and verified.
 - Human `interrupt` / `shutdown` still stop it immediately.
 
 ### Phase 1: in-turn autonomous chaining
@@ -41,7 +40,10 @@ Phase 1 keeps the existing turn runtime and extends the collaboration contract:
 - add `non_stop` as a first-class collaboration mode
 - add dedicated built-in developer instructions
 - keep ordinary response completion as "search for the next task and continue"
-- keep `<await_user_input>` as the only model-driven stop condition
+- use `<task_complete>` to end the current turn while keeping the goal active
+- use `<goal_complete>` only for true goal completion
+- keep `<await_user_input>` as the blocker stop condition and `<goal_complete>`
+  as the success stop condition
 - keep hard guardrails (continuation/stall limits) to avoid runaway loops
 
 This phase is intentionally conservative: it proves the behavior change without
@@ -69,8 +71,8 @@ These checkpoints persist:
 - the active goal prompt
 - the latest turn status
 - the latest visible assistant summary
-- the latest raw assistant control signal (`continue`, `task_complete`, or
-  `await_user_input`)
+- the latest raw assistant control signal (`continue`, `task_complete`,
+  `goal_complete`, or `await_user_input`)
 
 That gives the supervisor enough durable state to resume from an explicit
 objective after process restarts, while still stopping automatically when human
@@ -83,8 +85,10 @@ practice:
 
 - an ordinary response completion should keep the turn moving
 - `<await_user_input>` remains the blocker stop signal
-- `<task_complete>` in `Non-stop` should be reserved for "I checked for the
-  next meaningful task and there is no worthwhile work left"
+- `<task_complete>` in `Non-stop` should end the current turn while keeping the
+  active goal alive
+- `<goal_complete>` in `Non-stop` should be reserved for "the user's requested
+  outcome is actually complete"
 
 ### Phase 3: constrained self-directed innovation
 

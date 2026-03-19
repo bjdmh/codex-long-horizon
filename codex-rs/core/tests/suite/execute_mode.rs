@@ -9,6 +9,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnCompleteReason;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_assistant_message;
@@ -28,6 +29,8 @@ use serde_json::json;
 
 const TASK_COMPLETE_OPEN_TAG: &str = "<task_complete>";
 const TASK_COMPLETE_CLOSE_TAG: &str = "</task_complete>";
+const GOAL_COMPLETE_OPEN_TAG: &str = "<goal_complete>";
+const GOAL_COMPLETE_CLOSE_TAG: &str = "</goal_complete>";
 const AWAIT_USER_INPUT_OPEN_TAG: &str = "<await_user_input>";
 const AUTO_CONTINUE_PREFIX: &str = "Continue executing the current task autonomously.";
 const STALL_RECOVERY_PREFIX: &str = "Your last visible update repeated without concrete progress";
@@ -534,6 +537,72 @@ async fn non_stop_rejects_unnecessary_await_user_input_and_continues() -> Result
             .any(|text| text.contains(NON_STOP_INVALID_AWAIT_PREFIX) && text.contains("turn_sleep")),
         "second request should include the non-stop invalid await_user_input correction"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_stop_task_complete_ends_turn_but_keeps_goal_active() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let test = test_codex().build(&server).await?;
+
+    mount_sse_sequence(
+        &server,
+        vec![sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message(
+                "msg-1",
+                &format!(
+                    "{TASK_COMPLETE_OPEN_TAG}finished the current monitoring pass{TASK_COMPLETE_CLOSE_TAG}"
+                ),
+            ),
+            ev_completed("resp-1"),
+        ])],
+    )
+    .await;
+
+    let completed = submit_non_stop_turn(&test, "keep tracking until done").await?;
+
+    assert_eq!(
+        completed.last_agent_message.as_deref(),
+        Some("finished the current monitoring pass")
+    );
+    assert_eq!(completed.completion_reason, TurnCompleteReason::Completed);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_stop_goal_complete_marks_true_terminal_success() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let test = test_codex().build(&server).await?;
+
+    mount_sse_sequence(
+        &server,
+        vec![sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message(
+                "msg-1",
+                &format!(
+                    "{GOAL_COMPLETE_OPEN_TAG}verified the user goal is satisfied{GOAL_COMPLETE_CLOSE_TAG}"
+                ),
+            ),
+            ev_completed("resp-1"),
+        ])],
+    )
+    .await;
+
+    let completed = submit_non_stop_turn(&test, "keep tracking until done").await?;
+
+    assert_eq!(
+        completed.last_agent_message.as_deref(),
+        Some("verified the user goal is satisfied")
+    );
+    assert_eq!(completed.completion_reason, TurnCompleteReason::NoMoreWork);
 
     Ok(())
 }

@@ -27,6 +27,8 @@ use tracing::instrument;
 
 pub(crate) const TASK_COMPLETE_OPEN_TAG: &str = "<task_complete>";
 pub(crate) const TASK_COMPLETE_CLOSE_TAG: &str = "</task_complete>";
+pub(crate) const GOAL_COMPLETE_OPEN_TAG: &str = "<goal_complete>";
+pub(crate) const GOAL_COMPLETE_CLOSE_TAG: &str = "</goal_complete>";
 pub(crate) const AWAIT_USER_INPUT_OPEN_TAG: &str = "<await_user_input>";
 pub(crate) const AWAIT_USER_INPUT_CLOSE_TAG: &str = "</await_user_input>";
 
@@ -36,6 +38,7 @@ pub(crate) enum AssistantControlSignal {
     Continue,
     AwaitUserInput,
     TaskComplete,
+    GoalComplete,
 }
 
 pub(crate) fn execute_mode_auto_continue_message(attempt: usize) -> String {
@@ -46,7 +49,7 @@ pub(crate) fn execute_mode_auto_continue_message(attempt: usize) -> String {
 
 pub(crate) fn non_stop_mode_auto_continue_message(attempt: usize) -> String {
     format!(
-        "Continue operating in Non-stop mode. This is non-stop auto-continuation #{attempt}. Do not stop for a status update, a completion guess, or an optional next step. If you finish a subtask, immediately search for the next concrete step and keep going. Use {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG} only when the next action truly requires information, credentials, approval, or a decision that only the user can provide. If you merely need time to pass or an external process to settle, use the `turn_sleep` tool instead. Only end the turn if you are blocked on information only the user can provide and you include {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG}, or if you have actively searched for the next step and there is truly nothing meaningful left to do, in which case end with {TASK_COMPLETE_OPEN_TAG}...{TASK_COMPLETE_CLOSE_TAG}."
+        "Continue operating in Non-stop mode. This is non-stop auto-continuation #{attempt}. Do not stop for a status update, a completion guess, or an optional next step. If you finish a subtask, immediately search for the next concrete step and keep going. Use {TASK_COMPLETE_OPEN_TAG}...{TASK_COMPLETE_CLOSE_TAG} only to end the current turn after a concrete step while the overall user goal still remains active. Use {GOAL_COMPLETE_OPEN_TAG}...{GOAL_COMPLETE_CLOSE_TAG} only when the user's requested outcome is actually achieved and verified. Use {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG} only when the next action truly requires information, credentials, approval, or a decision that only the user can provide. If you merely need time to pass or an external process to settle, use the `turn_sleep` tool instead."
     )
 }
 
@@ -81,7 +84,7 @@ pub(crate) fn non_stop_mode_stall_recovery_message(
 ) -> String {
     let repeated_status = trimmed_repeated_status(repeated_status);
     format!(
-        "Your last visible update repeated without concrete progress {stall_count} time(s): \"{repeated_status}\". Take a concrete next action now instead of another status update. If you think the main implementation is already done, explicitly search for the next concrete step that would still advance the task. Only if that search comes up empty should you end with {TASK_COMPLETE_OPEN_TAG}...{TASK_COMPLETE_CLOSE_TAG}. Use {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG} only for real user-only blockers; if you are simply waiting, use the `turn_sleep` tool."
+        "Your last visible update repeated without concrete progress {stall_count} time(s): \"{repeated_status}\". Take a concrete next action now instead of another status update. If the overall user goal is truly done, end with {GOAL_COMPLETE_OPEN_TAG}...{GOAL_COMPLETE_CLOSE_TAG}. If you are only wrapping up the current turn but the goal still remains active, end with {TASK_COMPLETE_OPEN_TAG}...{TASK_COMPLETE_CLOSE_TAG} so Non-stop can continue from the next turn. Use {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG} only for real user-only blockers; if you are simply waiting, use the `turn_sleep` tool."
     )
 }
 
@@ -188,6 +191,9 @@ fn assistant_control_signal_from_text(text: &str, mode: ModeKind) -> AssistantCo
     if text.contains(AWAIT_USER_INPUT_OPEN_TAG) {
         return AssistantControlSignal::AwaitUserInput;
     }
+    if mode == ModeKind::NonStop && text.contains(GOAL_COMPLETE_OPEN_TAG) {
+        return AssistantControlSignal::GoalComplete;
+    }
     if text.contains(TASK_COMPLETE_OPEN_TAG) {
         return AssistantControlSignal::TaskComplete;
     }
@@ -197,6 +203,8 @@ fn assistant_control_signal_from_text(text: &str, mode: ModeKind) -> AssistantCo
 fn strip_autonomous_control_tags(text: &str) -> String {
     text.replace(TASK_COMPLETE_OPEN_TAG, "")
         .replace(TASK_COMPLETE_CLOSE_TAG, "")
+        .replace(GOAL_COMPLETE_OPEN_TAG, "")
+        .replace(GOAL_COMPLETE_CLOSE_TAG, "")
         .replace(AWAIT_USER_INPUT_OPEN_TAG, "")
         .replace(AWAIT_USER_INPUT_CLOSE_TAG, "")
 }
@@ -593,6 +601,26 @@ mod tests {
         let item = assistant_output_text("<task_complete>Done and verified.</task_complete>");
 
         let turn_item = handle_non_tool_response_item(&item, ModeKind::LongRun)
+            .expect("assistant message should parse");
+
+        let TurnItem::AgentMessage(agent_message) = turn_item else {
+            panic!("expected agent message");
+        };
+        let text = agent_message
+            .content
+            .iter()
+            .map(|entry| match entry {
+                codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
+            })
+            .collect::<String>();
+        assert_eq!(text, "Done and verified.");
+    }
+
+    #[test]
+    fn handle_non_tool_response_item_strips_non_stop_goal_complete_tags() {
+        let item = assistant_output_text("<goal_complete>Done and verified.</goal_complete>");
+
+        let turn_item = handle_non_tool_response_item(&item, ModeKind::NonStop)
             .expect("assistant message should parse");
 
         let TurnItem::AgentMessage(agent_message) = turn_item else {

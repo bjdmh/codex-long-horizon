@@ -5243,12 +5243,15 @@ pub(crate) async fn run_turn(
                 }
                 if matches!(
                     assistant_control_signal,
-                    AssistantControlSignal::AwaitUserInput | AssistantControlSignal::TaskComplete
+                    AssistantControlSignal::AwaitUserInput
+                        | AssistantControlSignal::TaskComplete
+                        | AssistantControlSignal::GoalComplete
                 ) {
                     let completion_reason = match assistant_control_signal {
                         AssistantControlSignal::Continue => TurnCompleteReason::Completed,
                         AssistantControlSignal::AwaitUserInput => TurnCompleteReason::Blocked,
-                        AssistantControlSignal::TaskComplete => TurnCompleteReason::NoMoreWork,
+                        AssistantControlSignal::TaskComplete => TurnCompleteReason::Completed,
+                        AssistantControlSignal::GoalComplete => TurnCompleteReason::NoMoreWork,
                     };
                     sess.set_active_turn_completion_reason(completion_reason)
                         .await;
@@ -5397,7 +5400,8 @@ pub(crate) async fn run_turn(
                                 }
                             }
                             AssistantControlSignal::AwaitUserInput
-                            | AssistantControlSignal::TaskComplete => {}
+                            | AssistantControlSignal::TaskComplete
+                            | AssistantControlSignal::GoalComplete => {}
                         }
                     }
 
@@ -6698,7 +6702,9 @@ async fn try_run_sampling_request(
                 needs_follow_up |= output_result.needs_follow_up;
                 if matches!(
                     assistant_control_signal,
-                    AssistantControlSignal::AwaitUserInput | AssistantControlSignal::TaskComplete
+                    AssistantControlSignal::AwaitUserInput
+                        | AssistantControlSignal::TaskComplete
+                        | AssistantControlSignal::GoalComplete
                 ) {
                     terminal_signal_deadline = Some(Instant::now() + TERMINAL_SIGNAL_DRAIN_TIMEOUT);
                 }
@@ -6794,7 +6800,9 @@ async fn try_run_sampling_request(
 
                 let should_check_pending_input = !matches!(
                     assistant_control_signal,
-                    AssistantControlSignal::AwaitUserInput | AssistantControlSignal::TaskComplete
+                    AssistantControlSignal::AwaitUserInput
+                        | AssistantControlSignal::TaskComplete
+                        | AssistantControlSignal::GoalComplete
                 );
                 if should_check_pending_input {
                     needs_follow_up |= sess.has_pending_input().await;

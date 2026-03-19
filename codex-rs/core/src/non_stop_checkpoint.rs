@@ -17,6 +17,7 @@ use tracing::warn;
 
 use crate::codex::TurnContext;
 use crate::stream_events_utils::AWAIT_USER_INPUT_OPEN_TAG;
+use crate::stream_events_utils::GOAL_COMPLETE_OPEN_TAG;
 use crate::stream_events_utils::TASK_COMPLETE_OPEN_TAG;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
 
@@ -41,6 +42,7 @@ pub enum NonStopCheckpointControlSignal {
     Continue,
     AwaitUserInput,
     TaskComplete,
+    GoalComplete,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -303,8 +305,7 @@ async fn write_checkpoint(codex_home: &Path, thread_id: ThreadId) {
             std::fs::create_dir_all(parent)?;
         }
         let tmp_path = path.with_extension("json.tmp");
-        let payload =
-            serde_json::to_vec_pretty(&checkpoint).map_err(|err| std::io::Error::other(err))?;
+        let payload = serde_json::to_vec_pretty(&checkpoint).map_err(std::io::Error::other)?;
         std::fs::write(&tmp_path, payload)?;
         std::fs::rename(&tmp_path, &path)?;
         Ok(())
@@ -346,6 +347,9 @@ fn checkpoint_control_signal_from_item(
     let text = raw_assistant_output_text_from_item(item)?;
     if text.contains(AWAIT_USER_INPUT_OPEN_TAG) {
         return Some(NonStopCheckpointControlSignal::AwaitUserInput);
+    }
+    if text.contains(GOAL_COMPLETE_OPEN_TAG) {
+        return Some(NonStopCheckpointControlSignal::GoalComplete);
     }
     if text.contains(TASK_COMPLETE_OPEN_TAG) {
         return Some(NonStopCheckpointControlSignal::TaskComplete);
@@ -401,6 +405,20 @@ mod tests {
         assert_eq!(
             checkpoint_control_signal_from_item(&subtask_complete),
             Some(NonStopCheckpointControlSignal::TaskComplete)
+        );
+
+        let goal_complete = ResponseItem::Message {
+            id: Some("msg-4".to_string()),
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "<goal_complete>done for real</goal_complete>".to_string(),
+            }],
+            end_turn: Some(true),
+            phase: None,
+        };
+        assert_eq!(
+            checkpoint_control_signal_from_item(&goal_complete),
+            Some(NonStopCheckpointControlSignal::GoalComplete)
         );
 
         let plain = ResponseItem::Message {

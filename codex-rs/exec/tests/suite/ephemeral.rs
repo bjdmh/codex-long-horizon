@@ -332,19 +332,29 @@ async fn non_stop_rejects_unnecessary_await_user_input_and_keeps_running() -> an
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn non_stop_task_complete_stops_cleanly_and_writes_last_message() -> anyhow::Result<()> {
+async fn non_stop_task_complete_starts_follow_up_turn_until_goal_complete() -> anyhow::Result<()> {
     let test = test_codex_exec();
     let server = responses::start_mock_server().await;
-    let requests = responses::mount_sse_once(
+    let requests = responses::mount_sse_sequence(
         &server,
-        responses::sse(vec![
-            responses::ev_response_created("resp-1"),
-            responses::ev_assistant_message(
-                "msg-1",
-                "Checked for the next step.\n<task_complete>Nothing meaningful remains.</task_complete>",
-            ),
-            responses::ev_completed("resp-1"),
-        ]),
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_assistant_message(
+                    "msg-1",
+                    "Finished the current monitoring pass.\n<task_complete>Goal still active.</task_complete>",
+                ),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-2"),
+                responses::ev_assistant_message(
+                    "msg-2",
+                    "Verified the rollout completed.\n<goal_complete>User goal is now satisfied.</goal_complete>",
+                ),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
     )
     .await;
     let last_message_path = test.home_path().join("last-message.txt");
@@ -358,10 +368,21 @@ async fn non_stop_task_complete_stops_cleanly_and_writes_last_message() -> anyho
         .assert()
         .code(0);
 
-    assert_eq!(requests.requests().len(), 1);
+    let all_requests = requests.requests();
+    assert_eq!(all_requests.len(), 2);
+    assert!(
+        all_requests[1].body_contains_text("finish the migration"),
+        "expected follow-up request to continue the same active goal, got: {:?}",
+        all_requests[1].body_json()
+    );
+    assert!(
+        all_requests[1].body_contains_text("The previous turn ended with <task_complete>"),
+        "expected follow-up request to explain that task_complete keeps the goal active, got: {:?}",
+        all_requests[1].body_json()
+    );
     assert_eq!(
         std::fs::read_to_string(&last_message_path)?,
-        "Checked for the next step.\nNothing meaningful remains."
+        "Verified the rollout completed.\nUser goal is now satisfied."
     );
 
     let thread_id = extract_conversation_id(
@@ -381,11 +402,11 @@ async fn non_stop_task_complete_stops_cleanly_and_writes_last_message() -> anyho
     assert_eq!(checkpoint.status, NonStopCheckpointStatus::TurnComplete);
     assert_eq!(
         checkpoint.last_assistant_control_signal,
-        Some(NonStopCheckpointControlSignal::TaskComplete)
+        Some(NonStopCheckpointControlSignal::GoalComplete)
     );
     assert_eq!(
         checkpoint.last_agent_message.as_deref(),
-        Some("Checked for the next step.\nNothing meaningful remains.")
+        Some("Verified the rollout completed.\nUser goal is now satisfied.")
     );
     assert_eq!(
         checkpoint.goal_prompt.as_deref(),
