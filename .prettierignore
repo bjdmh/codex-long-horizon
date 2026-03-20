@@ -1,6 +1,7 @@
 /codex-cli/dist
 /codex-cli/node_modules
 pnpm-lock.yaml
+.github/workflows/long-horizon-suite.yml
 
 prompt.md
 *_prompt.md
