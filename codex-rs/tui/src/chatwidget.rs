@@ -594,6 +594,12 @@ pub(crate) struct ChatWidget {
     turn_sleep_inhibitor: SleepInhibitor,
     task_complete_pending: bool,
     unified_exec_processes: Vec<UnifiedExecProcessSummary>,
+    /// True after a `UserTurn` has been submitted locally but before the corresponding
+    /// `TurnStarted` lifecycle event arrives from core.
+    ///
+    /// This keeps the TUI in a visible working state even if the start event is delayed or lost,
+    /// avoiding a confusing "message submitted but nothing is happening" gap.
+    pending_turn_start: bool,
     /// Tracks whether codex-core currently considers an agent turn to be in progress.
     ///
     /// This is kept separate from `mcp_startup_status` so that MCP startup progress (or completion)
@@ -966,8 +972,18 @@ impl ChatWidget {
     /// The bottom pane only has one running flag, but this module treats it as a derived state of
     /// both the agent turn lifecycle and MCP startup lifecycle.
     fn update_task_running_state(&mut self) {
-        self.bottom_pane
-            .set_task_running(self.agent_turn_running || self.mcp_startup_status.is_some());
+        self.bottom_pane.set_task_running(
+            self.agent_turn_running || self.pending_turn_start || self.mcp_startup_status.is_some(),
+        );
+    }
+
+    fn mark_turn_start_pending(&mut self) {
+        self.pending_turn_start = true;
+        self.turn_sleep_inhibitor.set_turn_running(true);
+        self.update_task_running_state();
+        self.bottom_pane.set_interrupt_hint_visible(true);
+        self.set_status_header(String::from("Working"));
+        self.request_redraw();
     }
 
     fn restore_reasoning_status_header(&mut self) {
@@ -1521,6 +1537,7 @@ impl ChatWidget {
     // Raw reasoning uses the same flow as summarized reasoning
 
     fn on_task_started(&mut self) {
+        self.pending_turn_start = false;
         self.agent_turn_running = true;
         self.standalone_user_shell_turn_running = self.pending_standalone_user_shell_submission;
         self.pending_standalone_user_shell_submission = false;
@@ -1587,6 +1604,7 @@ impl ChatWidget {
         // Mark task stopped and request redraw now that all content is in history.
         self.pending_status_indicator_restore = false;
         self.agent_turn_running = false;
+        self.pending_turn_start = false;
         self.standalone_user_shell_turn_running = false;
         self.pending_manual_compact_completion = false;
         self.pending_standalone_user_shell_submission = false;
@@ -1867,6 +1885,7 @@ impl ChatWidget {
         self.finalize_active_cell_as_failed();
         // Reset running state and clear streaming buffers.
         self.agent_turn_running = false;
+        self.pending_turn_start = false;
         self.turn_sleep_inhibitor.set_turn_running(false);
         self.update_task_running_state();
         self.running_commands.clear();
@@ -3184,6 +3203,7 @@ impl ChatWidget {
             turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
+            pending_turn_start: false,
             agent_turn_running: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
@@ -3370,6 +3390,7 @@ impl ChatWidget {
             turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
+            pending_turn_start: false,
             agent_turn_running: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
@@ -3548,6 +3569,7 @@ impl ChatWidget {
             turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
+            pending_turn_start: false,
             agent_turn_running: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
@@ -4624,6 +4646,8 @@ impl ChatWidget {
         if !self.submit_op(op) {
             return;
         }
+
+        self.mark_turn_start_pending();
 
         if origin == UserMessageSubmissionOrigin::AutoQueue {
             self.record_recent_auto_submission(fingerprint);

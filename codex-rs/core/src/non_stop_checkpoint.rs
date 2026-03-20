@@ -131,6 +131,8 @@ pub struct NonStopCheckpoint {
     pub last_agent_message: Option<String>,
     pub last_assistant_control_signal: Option<NonStopCheckpointControlSignal>,
     #[serde(default)]
+    pub consecutive_task_complete_turns: u32,
+    #[serde(default)]
     pub last_user_input_at: Option<i64>,
     #[serde(default)]
     pub budget_window: Option<NonStopBudgetWindow>,
@@ -251,6 +253,9 @@ pub(crate) async fn maybe_persist_checkpoint_with_context(
         last_assistant_control_signal: existing
             .as_ref()
             .and_then(|checkpoint| checkpoint.last_assistant_control_signal),
+        consecutive_task_complete_turns: existing
+            .as_ref()
+            .map_or(0, |checkpoint| checkpoint.consecutive_task_complete_turns),
         last_user_input_at: existing
             .as_ref()
             .and_then(|checkpoint| checkpoint.last_user_input_at),
@@ -297,10 +302,23 @@ pub(crate) async fn maybe_persist_checkpoint_with_context(
             checkpoint.turn_id = Some(turn_context.turn_id.clone());
             checkpoint.status = NonStopCheckpointStatus::TurnComplete;
             checkpoint.last_agent_message = event.last_agent_message.clone();
+            checkpoint.consecutive_task_complete_turns =
+                match checkpoint.last_assistant_control_signal {
+                    Some(NonStopCheckpointControlSignal::TaskComplete) => {
+                        checkpoint.consecutive_task_complete_turns.saturating_add(1)
+                    }
+                    Some(
+                        NonStopCheckpointControlSignal::Continue
+                        | NonStopCheckpointControlSignal::AwaitUserInput
+                        | NonStopCheckpointControlSignal::GoalComplete,
+                    )
+                    | None => 0,
+                };
         }
         EventMsg::TurnAborted(event) => {
             checkpoint.turn_id = Some(turn_context.turn_id.clone());
             checkpoint.status = NonStopCheckpointStatus::TurnAborted;
+            checkpoint.consecutive_task_complete_turns = 0;
             if checkpoint.last_assistant_control_signal
                 != Some(NonStopCheckpointControlSignal::AwaitUserInput)
             {
@@ -311,6 +329,7 @@ pub(crate) async fn maybe_persist_checkpoint_with_context(
             checkpoint.turn_id = Some(turn_context.turn_id.clone());
             checkpoint.status = NonStopCheckpointStatus::Error;
             checkpoint.last_agent_message = Some(event.message.clone());
+            checkpoint.consecutive_task_complete_turns = 0;
         }
         EventMsg::ShutdownComplete => {
             if !matches!(
@@ -410,6 +429,13 @@ pub async fn register_non_stop_session(
         goal_prompt: goal_prompt.or(existing_goal_prompt),
         last_agent_message: existing_last_agent_message,
         last_assistant_control_signal: existing_last_assistant_control_signal,
+        consecutive_task_complete_turns: if reset_budget_from_user_input {
+            0
+        } else {
+            existing
+                .as_ref()
+                .map_or(0, |checkpoint| checkpoint.consecutive_task_complete_turns)
+        },
         last_user_input_at: if reset_budget_from_user_input {
             Some(now)
         } else {
@@ -656,6 +682,8 @@ fn parse_prompt_duration_secs(prompt: &str) -> Option<i64> {
 mod tests {
     use super::*;
     use codex_protocol::models::ContentItem;
+    use codex_protocol::protocol::TurnCompleteEvent;
+    use codex_protocol::protocol::TurnCompleteReason;
     use tempfile::TempDir;
 
     #[test]
@@ -789,6 +817,7 @@ mod tests {
         assert_eq!(checkpoint.goal_prompt.as_deref(), Some("ship the feature"));
         assert_eq!(checkpoint.turn_id, None);
         assert_eq!(checkpoint.last_assistant_control_signal, None);
+        assert_eq!(checkpoint.consecutive_task_complete_turns, 0);
         assert_eq!(checkpoint.last_user_input_at, Some(checkpoint.updated_at));
         assert_eq!(
             checkpoint
@@ -855,6 +884,7 @@ mod tests {
             .expect("updated checkpoint");
         assert_eq!(updated.innovation_backlog, Vec::new());
         assert_eq!(updated.goal_prompt.as_deref(), Some("watch for 30 minutes"));
+        assert_eq!(updated.consecutive_task_complete_turns, 0);
         assert_eq!(
             updated
                 .budget_window
@@ -863,5 +893,149 @@ mod tests {
             Some(30 * 60)
         );
         assert!(updated.self_directed_innovation_enabled);
+    }
+
+    #[tokio::test]
+    async fn checkpoint_tracks_consecutive_task_complete_turns() {
+        let dir = TempDir::new().expect("tempdir");
+        let thread_id = ThreadId::new();
+        let context = NonStopCheckpointContext {
+            turn_id: "turn-1".to_string(),
+            collaboration_mode: ModeKind::NonStop,
+            model: "gpt-5.4".to_string(),
+            cwd: dir.path().to_path_buf(),
+            session_source: SessionSource::Exec,
+        };
+
+        register_non_stop_session(
+            dir.path(),
+            thread_id,
+            "gpt-5.4",
+            dir.path(),
+            SessionSource::Exec,
+            RegisterNonStopSessionOptions {
+                goal_prompt: Some("finish the migration".to_string()),
+                reset_budget_from_user_input: true,
+                self_directed_innovation_enabled: false,
+            },
+        )
+        .await;
+
+        maybe_persist_checkpoint_with_context(
+            dir.path(),
+            thread_id,
+            &context,
+            &EventMsg::RawResponseItem(RawResponseItemEvent {
+                item: ResponseItem::Message {
+                    id: Some("msg-1".to_string()),
+                    role: "assistant".to_string(),
+                    content: vec![ContentItem::OutputText {
+                        text: "<task_complete>done</task_complete>".to_string(),
+                    }],
+                    end_turn: Some(true),
+                    phase: None,
+                },
+            }),
+        )
+        .await;
+        maybe_persist_checkpoint_with_context(
+            dir.path(),
+            thread_id,
+            &context,
+            &EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: "turn-1".to_string(),
+                last_agent_message: Some("done".to_string()),
+                completion_reason: TurnCompleteReason::Completed,
+            }),
+        )
+        .await;
+
+        let first = read_non_stop_checkpoint(dir.path(), thread_id)
+            .await
+            .expect("first checkpoint");
+        assert_eq!(first.consecutive_task_complete_turns, 1);
+
+        maybe_persist_checkpoint_with_context(
+            dir.path(),
+            thread_id,
+            &NonStopCheckpointContext {
+                turn_id: "turn-2".to_string(),
+                ..context.clone()
+            },
+            &EventMsg::RawResponseItem(RawResponseItemEvent {
+                item: ResponseItem::Message {
+                    id: Some("msg-2".to_string()),
+                    role: "assistant".to_string(),
+                    content: vec![ContentItem::OutputText {
+                        text: "<task_complete>done again</task_complete>".to_string(),
+                    }],
+                    end_turn: Some(true),
+                    phase: None,
+                },
+            }),
+        )
+        .await;
+        maybe_persist_checkpoint_with_context(
+            dir.path(),
+            thread_id,
+            &NonStopCheckpointContext {
+                turn_id: "turn-2".to_string(),
+                ..context.clone()
+            },
+            &EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: "turn-2".to_string(),
+                last_agent_message: Some("done again".to_string()),
+                completion_reason: TurnCompleteReason::Completed,
+            }),
+        )
+        .await;
+
+        let second = read_non_stop_checkpoint(dir.path(), thread_id)
+            .await
+            .expect("second checkpoint");
+        assert_eq!(second.consecutive_task_complete_turns, 2);
+
+        maybe_persist_checkpoint_with_context(
+            dir.path(),
+            thread_id,
+            &NonStopCheckpointContext {
+                turn_id: "turn-3".to_string(),
+                ..context
+            },
+            &EventMsg::RawResponseItem(RawResponseItemEvent {
+                item: ResponseItem::Message {
+                    id: Some("msg-3".to_string()),
+                    role: "assistant".to_string(),
+                    content: vec![ContentItem::OutputText {
+                        text: "<goal_complete>done for real</goal_complete>".to_string(),
+                    }],
+                    end_turn: Some(true),
+                    phase: None,
+                },
+            }),
+        )
+        .await;
+        maybe_persist_checkpoint_with_context(
+            dir.path(),
+            thread_id,
+            &NonStopCheckpointContext {
+                turn_id: "turn-3".to_string(),
+                collaboration_mode: ModeKind::NonStop,
+                model: "gpt-5.4".to_string(),
+                cwd: dir.path().to_path_buf(),
+                session_source: SessionSource::Exec,
+            },
+            &EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: "turn-3".to_string(),
+                last_agent_message: Some("done for real".to_string()),
+                completion_reason: TurnCompleteReason::NoMoreWork,
+            }),
+        )
+        .await;
+
+        let final_checkpoint = read_non_stop_checkpoint(dir.path(), thread_id)
+            .await
+            .expect("final checkpoint");
+        assert_eq!(final_checkpoint.consecutive_task_complete_turns, 0);
     }
 }

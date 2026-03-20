@@ -549,12 +549,12 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let output_schema = load_output_schema(output_schema_path.clone());
     let non_stop_developer_instructions = if self_directed_innovation {
         Some(
-            "Bounded self-directed innovation is enabled for this Non-stop run. You may only use it when it clearly stays within the active goal, fits the remaining time budget, and does not create obvious high-risk side effects. Before executing any self-directed innovation, first record it with <innovation_candidate>{\"title\":\"...\",\"rationale\":\"...\",\"relevance\":\"...\",\"risk\":\"low|medium|high\",\"estimated_duration\":\"30m\"}</innovation_candidate> and then hand off with <task_complete>...</task_complete>."
+            "Bounded self-directed innovation is enabled for this Non-stop run. Treat the active goal as an end-to-end delivery contract: keep pushing until the requested outcome is actually achieved and verified, including clearly implied tests, cleanup, and docs when they are needed to make the result genuinely complete. You may only use self-directed innovation when it clearly stays within the active goal, fits the remaining time budget, and does not create obvious high-risk side effects. Before executing any self-directed innovation, first record it with <innovation_candidate>{\"title\":\"...\",\"rationale\":\"...\",\"relevance\":\"...\",\"risk\":\"low|medium|high\",\"estimated_duration\":\"30m\"}</innovation_candidate> and then hand off with <task_complete>...</task_complete>."
                 .to_string(),
         )
     } else {
         Some(
-            "Self-directed innovation is disabled for this run unless the user explicitly enables it with the matching CLI flag. Keep working only on tasks that are directly requested or clearly implied by the active goal."
+            "Self-directed innovation is disabled for this run unless the user explicitly enables it with the matching CLI flag. Treat the active goal as an end-to-end delivery contract and keep working on tasks that are directly requested or clearly implied by making that goal genuinely complete, including necessary verification, cleanup, and documentation updates."
                 .to_string(),
         )
     };
@@ -1041,7 +1041,7 @@ fn build_non_stop_supervisor_prompt(checkpoint: &NonStopCheckpoint) -> String {
         "Continue making progress on the current non-stop goal from the existing thread state.",
     );
     let mut prompt = format!(
-        "Resume Non-stop execution toward the active goal.\nGoal: {goal}\nReview the existing thread state, avoid redoing finished work, and immediately choose the next highest-leverage concrete task. Treat the goal as still incomplete unless you can now verify that the user's requested outcome is actually achieved."
+        "Resume Non-stop execution toward the active goal.\nGoal: {goal}\nReview the existing thread state, avoid redoing finished work, and immediately choose the next highest-leverage concrete task. Treat the goal as an end-to-end delivery contract, not merely the next subtask. Before ending this turn, audit what user-visible deliverables, verification, and clearly implied cleanup, tests, or documentation still remain. Treat the goal as still incomplete unless you can now verify that the user's requested outcome is actually achieved end to end."
     );
     if let Some(budget_summary) = non_stop_budget_summary(checkpoint) {
         prompt.push_str(&format!("\nTime budget: {budget_summary}"));
@@ -1087,8 +1087,14 @@ fn build_non_stop_supervisor_prompt(checkpoint: &NonStopCheckpoint) -> String {
         == Some(NonStopCheckpointControlSignal::TaskComplete)
     {
         prompt.push_str(
-            "\nThe previous turn ended with <task_complete>, which in Non-stop means the turn finished a concrete step but the overall goal still remains active. Keep monitoring or advancing the goal until it is actually satisfied.",
+            "\nThe previous turn ended with <task_complete>, which in Non-stop means the turn finished a concrete step but the overall goal still remains active. Do not stop at the next convenient boundary. Use this turn to close the next highest-leverage gap toward end-to-end completion, and only emit another <task_complete> after you have exhausted the useful actions that fit in this turn.",
         );
+    }
+    if checkpoint.consecutive_task_complete_turns >= 2 {
+        prompt.push_str(&format!(
+            "\nThe last {} consecutive Non-stop turns ended with <task_complete> while the goal stayed active. Escalate the stall penalty now: do not emit another <task_complete> until you first attempt a materially different or higher-leverage action in this turn, such as direct verification, deeper inspection, a broader search, tests, implementation work, or another concrete step that closes an end-to-end gap.",
+            checkpoint.consecutive_task_complete_turns
+        ));
     }
     if checkpoint.self_directed_innovation_enabled {
         prompt.push_str(
@@ -1096,7 +1102,7 @@ fn build_non_stop_supervisor_prompt(checkpoint: &NonStopCheckpoint) -> String {
         );
     }
     prompt.push_str(
-        "\nOnly stop if you are blocked on information the user must provide and include <await_user_input>...</await_user_input>, or if the active goal is truly achieved and you include <goal_complete>...</goal_complete>.",
+        "\nOnly stop if you are blocked on information the user must provide and include <await_user_input>...</await_user_input>, or if the active goal is truly achieved and verified end to end and you include <goal_complete>...</goal_complete>.",
     );
     prompt
 }
@@ -1660,6 +1666,7 @@ mod tests {
             goal_prompt: Some(goal_prompt.to_string()),
             last_agent_message: Some("done".to_string()),
             last_assistant_control_signal: Some(NonStopCheckpointControlSignal::TaskComplete),
+            consecutive_task_complete_turns: 1,
             last_user_input_at: Some(updated_at - 10),
             budget_window: None,
             innovation_backlog: Vec::new(),
@@ -1745,11 +1752,47 @@ mod tests {
         let prompt = build_non_stop_supervisor_prompt(&checkpoint);
         assert!(prompt.contains("Pending innovation backlog"));
         assert!(prompt.contains("remaining out of 2h"));
+        assert!(prompt.contains("end-to-end delivery contract"));
+        assert!(prompt.contains("clearly implied cleanup, tests, or documentation"));
 
         checkpoint.self_directed_innovation_enabled = false;
         let prompt_without_flag = build_non_stop_supervisor_prompt(&checkpoint);
         assert!(!prompt_without_flag.contains("Pending innovation backlog"));
         assert!(!prompt_without_flag.contains("Self-directed innovation is allowed"));
+    }
+
+    #[test]
+    fn non_stop_supervisor_prompt_hardens_after_task_complete() {
+        let mut checkpoint = test_checkpoint(
+            "019cff45-7090-7752-a34a-d93c178b7624",
+            50,
+            "finish the migration",
+        );
+        checkpoint.last_assistant_control_signal =
+            Some(NonStopCheckpointControlSignal::TaskComplete);
+
+        let prompt = build_non_stop_supervisor_prompt(&checkpoint);
+
+        assert!(prompt.contains("Do not stop at the next convenient boundary"));
+        assert!(prompt.contains("next highest-leverage gap toward end-to-end completion"));
+        assert!(prompt.contains("exhausted the useful actions that fit in this turn"));
+        assert!(prompt.contains("achieved and verified end to end"));
+    }
+
+    #[test]
+    fn non_stop_supervisor_prompt_escalates_after_repeated_task_complete_turns() {
+        let mut checkpoint = test_checkpoint(
+            "019cff45-7090-7752-a34a-d93c178b7625",
+            60,
+            "finish the migration",
+        );
+        checkpoint.consecutive_task_complete_turns = 3;
+
+        let prompt = build_non_stop_supervisor_prompt(&checkpoint);
+
+        assert!(prompt.contains("last 3 consecutive Non-stop turns ended with <task_complete>"));
+        assert!(prompt.contains("Escalate the stall penalty now"));
+        assert!(prompt.contains("materially different or higher-leverage action"));
     }
 
     #[test]

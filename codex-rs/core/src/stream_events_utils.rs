@@ -52,7 +52,7 @@ pub(crate) fn execute_mode_auto_continue_message(attempt: usize) -> String {
 
 pub(crate) fn non_stop_mode_auto_continue_message(attempt: usize) -> String {
     format!(
-        "Continue operating in Non-stop mode. This is non-stop auto-continuation #{attempt}. Do not stop for a status update, a completion guess, or an optional next step. If you finish a subtask, immediately search for the next concrete step and keep going. Self-directed innovation is allowed only when this run explicitly enables it, it stays inside the active goal, it fits the remaining time budget, and it does not create obvious high-risk side effects. Before starting self-directed innovation, record it with {INNOVATION_CANDIDATE_OPEN_TAG}{{\"title\":\"...\",\"rationale\":\"...\",\"relevance\":\"...\",\"risk\":\"low|medium|high\",\"estimated_duration\":\"30m\"}}{INNOVATION_CANDIDATE_CLOSE_TAG} and then hand off with {TASK_COMPLETE_OPEN_TAG}...{TASK_COMPLETE_CLOSE_TAG}. Use {TASK_COMPLETE_OPEN_TAG}...{TASK_COMPLETE_CLOSE_TAG} only to end the current turn after a concrete step while the overall user goal still remains active. Use {GOAL_COMPLETE_OPEN_TAG}...{GOAL_COMPLETE_CLOSE_TAG} only when the user's requested outcome is actually achieved and verified. Use {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG} only when the next action truly requires information, credentials, approval, or a decision that only the user can provide. If you merely need time to pass or an external process to settle, use the `turn_sleep` tool instead."
+        "Continue operating in Non-stop mode. This is non-stop auto-continuation #{attempt}. Do not stop for a status update, a completion guess, or an optional next step. Treat the active goal as an end-to-end delivery contract, not merely the next subtask. Before ending the turn, audit remaining user-visible deliverables, required verification, and any clearly implied cleanup, tests, or documentation needed for the goal to be genuinely complete. If a highest-leverage next action is available, do it now instead of stopping. If you finish a subtask, immediately search for the next concrete step and keep going. Self-directed innovation is allowed only when this run explicitly enables it, it stays inside the active goal, it fits the remaining time budget, and it does not create obvious high-risk side effects. Before starting self-directed innovation, record it with {INNOVATION_CANDIDATE_OPEN_TAG}{{\"title\":\"...\",\"rationale\":\"...\",\"relevance\":\"...\",\"risk\":\"low|medium|high\",\"estimated_duration\":\"30m\"}}{INNOVATION_CANDIDATE_CLOSE_TAG} and then hand off with {TASK_COMPLETE_OPEN_TAG}...{TASK_COMPLETE_CLOSE_TAG}. Use {TASK_COMPLETE_OPEN_TAG}...{TASK_COMPLETE_CLOSE_TAG} only after you have exhausted the useful actions that fit in this turn and are intentionally handing off continuation while the overall user goal still remains active. Use {GOAL_COMPLETE_OPEN_TAG}...{GOAL_COMPLETE_CLOSE_TAG} only when the user's requested outcome is actually achieved and verified end to end. Use {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG} only when the next action truly requires information, credentials, approval, or a decision that only the user can provide. If you merely need time to pass or an external process to settle, use the `turn_sleep` tool instead."
     )
 }
 
@@ -87,7 +87,7 @@ pub(crate) fn non_stop_mode_stall_recovery_message(
 ) -> String {
     let repeated_status = trimmed_repeated_status(repeated_status);
     format!(
-        "Your last visible update repeated without concrete progress {stall_count} time(s): \"{repeated_status}\". Take a concrete next action now instead of another status update. If the overall user goal is truly done, end with {GOAL_COMPLETE_OPEN_TAG}...{GOAL_COMPLETE_CLOSE_TAG}. If this run explicitly enables self-directed innovation and you want to start it, first record it with {INNOVATION_CANDIDATE_OPEN_TAG}...{INNOVATION_CANDIDATE_CLOSE_TAG} and then end the turn with {TASK_COMPLETE_OPEN_TAG}...{TASK_COMPLETE_CLOSE_TAG}. If you are only wrapping up the current turn but the goal still remains active, end with {TASK_COMPLETE_OPEN_TAG}...{TASK_COMPLETE_CLOSE_TAG} so Non-stop can continue from the next turn. Use {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG} only for real user-only blockers; if you are simply waiting, use the `turn_sleep` tool."
+        "Your last visible update repeated without concrete progress {stall_count} time(s): \"{repeated_status}\". Take a concrete next action now instead of another status update. Re-check the goal at the end-to-end level: what deliverable, verification step, or clearly implied cleanup is still missing, and what is the highest-leverage next action to close that gap? Execute that action in this turn if you can. If the overall user goal is truly done, end with {GOAL_COMPLETE_OPEN_TAG}...{GOAL_COMPLETE_CLOSE_TAG}. If this run explicitly enables self-directed innovation and you want to start it, first record it with {INNOVATION_CANDIDATE_OPEN_TAG}...{INNOVATION_CANDIDATE_CLOSE_TAG} and then end the turn with {TASK_COMPLETE_OPEN_TAG}...{TASK_COMPLETE_CLOSE_TAG}. If you are only wrapping up the current turn after exhausting the useful actions that fit here but the goal still remains active, end with {TASK_COMPLETE_OPEN_TAG}...{TASK_COMPLETE_CLOSE_TAG} so Non-stop can continue from the next turn. Use {AWAIT_USER_INPUT_OPEN_TAG}...{AWAIT_USER_INPUT_CLOSE_TAG} only for real user-only blockers; if you are simply waiting, use the `turn_sleep` tool."
     )
 }
 
@@ -535,6 +535,8 @@ mod tests {
     use super::handle_non_tool_response_item;
     use super::last_assistant_message_from_item;
     use super::non_stop_await_user_input_is_justified;
+    use super::non_stop_mode_auto_continue_message;
+    use super::non_stop_mode_stall_recovery_message;
     use super::normalize_execute_progress_message;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::items::TurnItem;
@@ -679,6 +681,19 @@ mod tests {
         assert!(message.contains("Still working on it."));
         assert!(message.contains(TASK_COMPLETE_OPEN_TAG));
         assert!(message.contains(AWAIT_USER_INPUT_OPEN_TAG));
+    }
+
+    #[test]
+    fn non_stop_messages_emphasize_end_to_end_completion() {
+        let auto_continue = non_stop_mode_auto_continue_message(3);
+        assert!(auto_continue.contains("end-to-end delivery contract"));
+        assert!(auto_continue.contains("clearly implied cleanup, tests, or documentation"));
+        assert!(auto_continue.contains("achieved and verified end to end"));
+
+        let stall_recovery = non_stop_mode_stall_recovery_message(2, Some("Still monitoring."));
+        assert!(stall_recovery.contains("end-to-end level"));
+        assert!(stall_recovery.contains("highest-leverage next action"));
+        assert!(stall_recovery.contains("Still monitoring."));
     }
 
     #[test]

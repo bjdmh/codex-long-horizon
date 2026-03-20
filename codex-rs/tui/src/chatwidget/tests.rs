@@ -1891,6 +1891,7 @@ async fn make_chatwidget_manual(
         turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
         task_complete_pending: false,
         unified_exec_processes: Vec::new(),
+        pending_turn_start: false,
         agent_turn_running: false,
         mcp_startup_status: None,
         connectors_cache: ConnectorsCacheState::default(),
@@ -2464,6 +2465,70 @@ async fn submit_user_message_with_mode_sets_coding_collaboration_mode() {
             panic!("expected Op::UserTurn with default collab mode, got {other:?}")
         }
     }
+
+    assert!(chat.pending_turn_start);
+    assert!(chat.bottom_pane.is_task_running());
+    assert_eq!(chat.current_status_header, "Working");
+}
+
+#[tokio::test]
+async fn user_turn_submission_marks_working_before_turn_started() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.submit_user_message("Ship it.".to_string().into());
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { .. } => {}
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+
+    assert!(chat.pending_turn_start);
+    assert!(chat.bottom_pane.is_task_running());
+    assert_eq!(chat.current_status_header, "Working");
+    assert!(chat.turn_sleep_inhibitor.is_turn_running());
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    assert!(!chat.pending_turn_start);
+    assert!(chat.agent_turn_running);
+    assert!(chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
+async fn user_turn_submission_pending_state_clears_on_error_without_turn_started() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.submit_user_message("Ship it.".to_string().into());
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { .. } => {}
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+
+    assert!(chat.pending_turn_start);
+    assert!(chat.bottom_pane.is_task_running());
+
+    chat.handle_codex_event(Event {
+        id: "err-1".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "boom".to_string(),
+            codex_error_info: None,
+        }),
+    });
+
+    assert!(!chat.pending_turn_start);
+    assert!(!chat.agent_turn_running);
+    assert!(!chat.bottom_pane.is_task_running());
+    assert!(!chat.turn_sleep_inhibitor.is_turn_running());
 }
 
 #[tokio::test]
