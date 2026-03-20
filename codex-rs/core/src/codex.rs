@@ -50,6 +50,7 @@ use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::stream_events_utils::non_stop_await_user_input_is_justified;
+use crate::stream_events_utils::non_stop_await_user_input_justification_text;
 use crate::stream_events_utils::non_stop_mode_auto_continue_message;
 use crate::stream_events_utils::non_stop_mode_invalid_await_user_input_message;
 use crate::stream_events_utils::non_stop_mode_stall_recovery_message;
@@ -5222,12 +5223,16 @@ pub(crate) async fn run_turn(
                 let SamplingRequestResult {
                     mut needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
+                    last_agent_raw_message: sampling_request_last_agent_raw_message,
                     mut assistant_control_signal,
                 } = sampling_request_output;
                 if autonomous_mode == ModeKind::NonStop
                     && assistant_control_signal == AssistantControlSignal::AwaitUserInput
                     && !non_stop_await_user_input_is_justified(
-                        sampling_request_last_agent_message.as_deref(),
+                        non_stop_await_user_input_justification_text(
+                            sampling_request_last_agent_raw_message.as_deref(),
+                            sampling_request_last_agent_message.as_deref(),
+                        ),
                     )
                 {
                     sess.send_event(
@@ -5976,6 +5981,7 @@ async fn built_tools(
 struct SamplingRequestResult {
     needs_follow_up: bool,
     last_agent_message: Option<String>,
+    last_agent_raw_message: Option<String>,
     assistant_control_signal: AssistantControlSignal,
 }
 
@@ -6583,6 +6589,7 @@ async fn try_run_sampling_request(
         FuturesOrdered::new();
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
+    let mut last_agent_raw_message: Option<String> = None;
     let mut assistant_control_signal = AssistantControlSignal::Continue;
     let mut active_item: Option<TurnItem> = None;
     let mut should_emit_turn_diff = false;
@@ -6616,6 +6623,7 @@ async fn try_run_sampling_request(
                     break Ok(SamplingRequestResult {
                         needs_follow_up: false,
                         last_agent_message,
+                        last_agent_raw_message: None,
                         assistant_control_signal,
                     });
                 }
@@ -6697,6 +6705,9 @@ async fn try_run_sampling_request(
                 }
                 if let Some(agent_message) = output_result.last_agent_message {
                     last_agent_message = Some(agent_message);
+                }
+                if let Some(raw_agent_message) = output_result.last_agent_raw_message {
+                    last_agent_raw_message = Some(raw_agent_message);
                 }
                 assistant_control_signal = output_result.assistant_control_signal;
                 needs_follow_up |= output_result.needs_follow_up;
@@ -6811,6 +6822,7 @@ async fn try_run_sampling_request(
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
                     last_agent_message,
+                    last_agent_raw_message,
                     assistant_control_signal,
                 });
             }

@@ -97,11 +97,24 @@ pub(crate) fn non_stop_mode_invalid_await_user_input_message() -> String {
     )
 }
 
+pub(crate) fn non_stop_await_user_input_justification_text<'a>(
+    raw_text: Option<&'a str>,
+    visible_text: Option<&'a str>,
+) -> Option<&'a str> {
+    raw_text
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .or_else(|| visible_text.map(str::trim).filter(|text| !text.is_empty()))
+}
+
 pub(crate) fn non_stop_await_user_input_is_justified(text: Option<&str>) -> bool {
     let Some(text) = text.map(str::trim).filter(|text| !text.is_empty()) else {
         return false;
     };
-    let normalized = text.to_ascii_lowercase();
+    let normalized = text
+        .replace(AWAIT_USER_INPUT_OPEN_TAG, "")
+        .replace(AWAIT_USER_INPUT_CLOSE_TAG, "")
+        .to_ascii_lowercase();
     let has_user_only_blocker = [
         "credential",
         "credentials",
@@ -310,6 +323,7 @@ pub(crate) type InFlightFuture<'f> =
 #[derive(Default)]
 pub(crate) struct OutputItemResult {
     pub last_agent_message: Option<String>,
+    pub last_agent_raw_message: Option<String>,
     pub assistant_control_signal: AssistantControlSignal,
     pub needs_follow_up: bool,
     pub tool_future: Option<InFlightFuture<'static>>,
@@ -378,6 +392,7 @@ pub(crate) async fn handle_output_item_done(
             record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
                 .await;
             if let Some(raw_text) = raw_assistant_output_text_from_item(&item) {
+                output.last_agent_raw_message = Some(raw_text.clone());
                 output.assistant_control_signal =
                     assistant_control_signal_from_text(&raw_text, mode);
             }
@@ -535,6 +550,7 @@ mod tests {
     use super::handle_non_tool_response_item;
     use super::last_assistant_message_from_item;
     use super::non_stop_await_user_input_is_justified;
+    use super::non_stop_await_user_input_justification_text;
     use super::non_stop_mode_auto_continue_message;
     use super::non_stop_mode_stall_recovery_message;
     use super::normalize_execute_progress_message;
@@ -702,6 +718,9 @@ mod tests {
             "I need production credentials before I can continue."
         )));
         assert!(non_stop_await_user_input_is_justified(Some(
+            "<await_user_input>I need production credentials before I can continue.</await_user_input>"
+        )));
+        assert!(non_stop_await_user_input_is_justified(Some(
             "I am still blocked in the test fixture until you provide the missing credential."
         )));
         assert!(!non_stop_await_user_input_is_justified(Some(
@@ -710,5 +729,22 @@ mod tests {
         assert!(!non_stop_await_user_input_is_justified(Some(
             "Waiting for the deployment job to settle before checking again."
         )));
+    }
+
+    #[test]
+    fn non_stop_await_user_input_uses_raw_reason_when_visible_text_is_empty() {
+        let text = non_stop_await_user_input_justification_text(
+            Some(
+                "<await_user_input>I need your approval for production access.</await_user_input>",
+            ),
+            None,
+        );
+
+        assert_eq!(
+            text,
+            Some(
+                "<await_user_input>I need your approval for production access.</await_user_input>"
+            )
+        );
     }
 }
