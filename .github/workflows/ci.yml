@@ -36,8 +36,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Use a rust-release version that includes all native binaries.
-          CODEX_VERSION=0.74.0
+          CODEX_VERSION="$(grep -m1 '^version' codex-rs/cli/Cargo.toml | sed -E 's/version *= *\"([^\"]+)\".*/\1/')"
           OUTPUT_DIR="${RUNNER_TEMP}"
           python3 ./scripts/stage_npm_packages.py \
             --release-version "$CODEX_VERSION" \
