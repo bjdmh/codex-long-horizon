@@ -5246,6 +5246,22 @@ pub(crate) async fn run_turn(
                     invalid_non_stop_await_user_input = true;
                     assistant_control_signal = AssistantControlSignal::Continue;
                 }
+                if assistant_control_signal == AssistantControlSignal::TaskComplete
+                    && should_continue_in_turn_for_non_stop_task_complete(
+                        autonomous_mode,
+                        &turn_context.session_source,
+                    )
+                {
+                    sess.send_event(
+                        &turn_context,
+                        EventMsg::Warning(WarningEvent {
+                            message: "Interactive Non-stop mode converted <task_complete> into continued execution so Codex can keep pushing within the same turn."
+                                .to_string(),
+                        }),
+                    )
+                    .await;
+                    assistant_control_signal = AssistantControlSignal::Continue;
+                }
                 if matches!(
                     assistant_control_signal,
                     AssistantControlSignal::AwaitUserInput
@@ -5997,6 +6013,14 @@ const fn autonomous_auto_continuation_limit(mode: ModeKind) -> usize {
         ModeKind::NonStop => NON_STOP_AUTO_CONTINUATION_LIMIT,
         ModeKind::Plan | ModeKind::Default | ModeKind::Execute | ModeKind::PairProgramming => 0,
     }
+}
+
+fn should_continue_in_turn_for_non_stop_task_complete(
+    mode: ModeKind,
+    session_source: &SessionSource,
+) -> bool {
+    mode == ModeKind::NonStop
+        && matches!(session_source, SessionSource::Cli | SessionSource::VSCode)
 }
 
 /// Ephemeral per-response state for streaming a single proposed plan.
@@ -7029,6 +7053,26 @@ mod tests {
     use std::sync::Arc;
     use std::sync::Once;
     use std::time::Duration as StdDuration;
+
+    #[test]
+    fn interactive_non_stop_task_complete_continues_in_turn() {
+        assert!(should_continue_in_turn_for_non_stop_task_complete(
+            ModeKind::NonStop,
+            &SessionSource::Cli,
+        ));
+        assert!(should_continue_in_turn_for_non_stop_task_complete(
+            ModeKind::NonStop,
+            &SessionSource::VSCode,
+        ));
+        assert!(!should_continue_in_turn_for_non_stop_task_complete(
+            ModeKind::NonStop,
+            &SessionSource::Exec,
+        ));
+        assert!(!should_continue_in_turn_for_non_stop_task_complete(
+            ModeKind::LongRun,
+            &SessionSource::Cli,
+        ));
+    }
 
     struct InstructionsTestCase {
         slug: &'static str,
