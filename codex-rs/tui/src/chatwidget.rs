@@ -140,6 +140,7 @@ use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnDiffEvent;
+use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UndoCompletedEvent;
 use codex_protocol::protocol::UndoStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
@@ -605,6 +606,8 @@ pub(crate) struct ChatWidget {
     /// This is kept separate from `mcp_startup_status` so that MCP startup progress (or completion)
     /// can update the status header without accidentally clearing the spinner for an active turn.
     agent_turn_running: bool,
+    /// The currently active turn id, when one has started and not yet ended.
+    active_turn_id: Option<String>,
     /// Tracks per-server MCP startup state while startup is in progress.
     ///
     /// The map is `Some(_)` from the first `McpStartupUpdate` until `McpStartupComplete`, and the
@@ -785,6 +788,7 @@ pub(crate) struct ThreadInputState {
     current_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
     agent_turn_running: bool,
+    active_turn_id: Option<String>,
     standalone_user_shell_turn_running: bool,
 }
 
@@ -1564,6 +1568,19 @@ impl ChatWidget {
     }
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
+        let turn_id = self.active_turn_id.clone();
+        self.on_task_complete_for_turn(turn_id.as_deref(), last_agent_message, from_replay);
+    }
+
+    fn on_task_complete_for_turn(
+        &mut self,
+        turn_id: Option<&str>,
+        last_agent_message: Option<String>,
+        from_replay: bool,
+    ) {
+        if self.should_ignore_terminal_turn_event(turn_id, from_replay) {
+            return;
+        }
         if let Some(message) = last_agent_message.as_ref()
             && !message.trim().is_empty()
         {
@@ -1604,6 +1621,7 @@ impl ChatWidget {
         // Mark task stopped and request redraw now that all content is in history.
         self.pending_status_indicator_restore = false;
         self.agent_turn_running = false;
+        self.active_turn_id = None;
         self.pending_turn_start = false;
         self.standalone_user_shell_turn_running = false;
         self.pending_manual_compact_completion = false;
@@ -2003,6 +2021,7 @@ impl ChatWidget {
     fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
         // Finalize, log a gentle prompt, and clear running state.
         self.finalize_turn();
+        self.active_turn_id = None;
         if reason == TurnAbortReason::Interrupted {
             self.clear_unified_exec_processes();
         }
@@ -2131,6 +2150,7 @@ impl ChatWidget {
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
             agent_turn_running: self.agent_turn_running,
+            active_turn_id: self.active_turn_id.clone(),
             standalone_user_shell_turn_running: self.standalone_user_shell_turn_running,
         })
     }
@@ -2140,6 +2160,7 @@ impl ChatWidget {
             self.current_collaboration_mode = input_state.current_collaboration_mode;
             self.active_collaboration_mask = input_state.active_collaboration_mask;
             self.agent_turn_running = input_state.agent_turn_running;
+            self.active_turn_id = input_state.active_turn_id;
             self.standalone_user_shell_turn_running =
                 input_state.standalone_user_shell_turn_running;
             self.pending_standalone_user_shell_submission = false;
@@ -2176,6 +2197,7 @@ impl ChatWidget {
                 .extend(input_state.queued_user_messages);
         } else {
             self.agent_turn_running = false;
+            self.active_turn_id = None;
             self.standalone_user_shell_turn_running = false;
             self.pending_standalone_user_shell_submission = false;
             self.pending_steers.clear();
@@ -2206,6 +2228,28 @@ impl ChatWidget {
 
     pub(crate) fn set_queue_autosend_suppressed(&mut self, suppressed: bool) {
         self.suppress_queue_autosend = suppressed;
+    }
+
+    fn should_ignore_terminal_turn_event(
+        &self,
+        event_turn_id: Option<&str>,
+        from_replay: bool,
+    ) -> bool {
+        let Some(event_turn_id) = event_turn_id else {
+            return false;
+        };
+        if let Some(active_turn_id) = self.active_turn_id.as_deref()
+            && active_turn_id != event_turn_id
+        {
+            tracing::debug!(
+                active_turn_id,
+                event_turn_id,
+                from_replay,
+                "ignoring stale terminal turn event"
+            );
+            return true;
+        }
+        false
     }
 
     fn on_plan_update(&mut self, update: UpdatePlanArgs) {
@@ -2570,6 +2614,9 @@ impl ChatWidget {
     }
 
     fn on_background_event(&mut self, message: String) {
+        if !self.bottom_pane.is_task_running() {
+            return;
+        }
         debug!("BackgroundEvent: {message}");
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane.set_interrupt_hint_visible(true);
@@ -2995,6 +3042,9 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
+        if !self.bottom_pane.is_task_running() {
+            return;
+        }
         // Ensure the status indicator is visible while the command runs.
         self.bottom_pane.ensure_status_indicator();
         self.running_commands.insert(
@@ -3059,6 +3109,9 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_mcp_begin_now(&mut self, ev: McpToolCallBeginEvent) {
+        if !self.bottom_pane.is_task_running() {
+            return;
+        }
         self.flush_answer_stream_with_separator();
         self.flush_active_cell();
         self.active_cell = Some(Box::new(history_cell::new_active_mcp_tool_call(
@@ -3205,6 +3258,7 @@ impl ChatWidget {
             unified_exec_processes: Vec::new(),
             pending_turn_start: false,
             agent_turn_running: false,
+            active_turn_id: None,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
             connectors_prefetch_in_flight: false,
@@ -3392,6 +3446,7 @@ impl ChatWidget {
             unified_exec_processes: Vec::new(),
             pending_turn_start: false,
             agent_turn_running: false,
+            active_turn_id: None,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
             connectors_prefetch_in_flight: false,
@@ -3571,6 +3626,7 @@ impl ChatWidget {
             unified_exec_processes: Vec::new(),
             pending_turn_start: false,
             agent_turn_running: false,
+            active_turn_id: None,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
             connectors_prefetch_in_flight: false,
@@ -4873,14 +4929,17 @@ impl ChatWidget {
                 self.on_agent_reasoning_final();
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
-            EventMsg::TurnStarted(_) => {
+            EventMsg::TurnStarted(TurnStartedEvent { turn_id, .. }) => {
+                self.active_turn_id = Some(turn_id);
                 if !is_resume_initial_replay {
                     self.on_task_started();
                 }
             }
             EventMsg::TurnComplete(TurnCompleteEvent {
-                last_agent_message, ..
-            }) => self.on_task_complete(last_agent_message, from_replay),
+                turn_id,
+                last_agent_message,
+                ..
+            }) => self.on_task_complete_for_turn(Some(&turn_id), last_agent_message, from_replay),
             EventMsg::TokenCount(ev) => {
                 self.set_token_info(ev.info);
                 self.on_rate_limit_snapshot(ev.rate_limits);
@@ -4908,19 +4967,25 @@ impl ChatWidget {
             }
             EventMsg::McpStartupUpdate(ev) => self.on_mcp_startup_update(ev),
             EventMsg::McpStartupComplete(ev) => self.on_mcp_startup_complete(ev),
-            EventMsg::TurnAborted(ev) => match ev.reason {
-                TurnAbortReason::Interrupted => {
-                    self.on_interrupted_turn(ev.reason);
+            EventMsg::TurnAborted(ev) => {
+                if self.should_ignore_terminal_turn_event(ev.turn_id.as_deref(), from_replay) {
+                    return;
                 }
-                TurnAbortReason::Replaced => {
-                    self.pending_steers.clear();
-                    self.refresh_pending_input_preview();
-                    self.on_error("Turn aborted: replaced by a new task".to_owned())
+                match ev.reason {
+                    TurnAbortReason::Interrupted => {
+                        self.on_interrupted_turn(ev.reason);
+                    }
+                    TurnAbortReason::Replaced => {
+                        self.active_turn_id = None;
+                        self.pending_steers.clear();
+                        self.refresh_pending_input_preview();
+                        self.on_error("Turn aborted: replaced by a new task".to_owned())
+                    }
+                    TurnAbortReason::ReviewEnded => {
+                        self.on_interrupted_turn(ev.reason);
+                    }
                 }
-                TurnAbortReason::ReviewEnded => {
-                    self.on_interrupted_turn(ev.reason);
-                }
-            },
+            }
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),
             EventMsg::ExecApprovalRequest(ev) => {
                 // For replayed events, synthesize an empty id (these should not occur).

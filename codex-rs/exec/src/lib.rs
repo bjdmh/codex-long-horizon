@@ -549,12 +549,12 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let output_schema = load_output_schema(output_schema_path.clone());
     let non_stop_developer_instructions = if self_directed_innovation {
         Some(
-            "Bounded self-directed innovation is enabled for this Non-stop run. Treat the active goal as an end-to-end delivery contract: keep pushing until the requested outcome is actually achieved and verified, including clearly implied tests, cleanup, and docs when they are needed to make the result genuinely complete. You may only use self-directed innovation when it clearly stays within the active goal, fits the remaining time budget, and does not create obvious high-risk side effects. Before executing any self-directed innovation, first record it with <innovation_candidate>{\"title\":\"...\",\"rationale\":\"...\",\"relevance\":\"...\",\"risk\":\"low|medium|high\",\"estimated_duration\":\"30m\"}</innovation_candidate> and then hand off with <task_complete>...</task_complete>."
+            "Bounded self-directed innovation is enabled for this Non-stop run. Treat the active goal as an end-to-end delivery contract: keep pushing until the requested outcome is actually achieved and verified, including clearly implied tests, cleanup, and docs when they are needed to make the result genuinely complete. If you can identify a concrete next step that fits in this turn, execute it instead of ending with suggestions, remaining-work notes, or a recommendation list. Use <task_complete>...</task_complete> only if you have actively searched for the next step, exhausted the useful actions that fit in this turn, and there is truly nothing meaningful left to do here except deliberate handoff while the overall goal still remains active. You may only use self-directed innovation when it clearly stays within the active goal, fits the remaining time budget, and does not create obvious high-risk side effects. Before executing any self-directed innovation, first record it with <innovation_candidate>{\"title\":\"...\",\"rationale\":\"...\",\"relevance\":\"...\",\"risk\":\"low|medium|high\",\"estimated_duration\":\"30m\"}</innovation_candidate> and then hand off with <task_complete>...</task_complete>."
                 .to_string(),
         )
     } else {
         Some(
-            "Self-directed innovation is disabled for this run unless the user explicitly enables it with the matching CLI flag. Treat the active goal as an end-to-end delivery contract and keep working on tasks that are directly requested or clearly implied by making that goal genuinely complete, including necessary verification, cleanup, and documentation updates."
+            "Self-directed innovation is disabled for this run unless the user explicitly enables it with the matching CLI flag. Treat the active goal as an end-to-end delivery contract and keep working on tasks that are directly requested or clearly implied by making that goal genuinely complete, including necessary verification, cleanup, and documentation updates. If you can identify a concrete next step that fits in this turn, execute it instead of ending with suggestions, remaining-work notes, or a recommendation list. Use <task_complete>...</task_complete> only if you have actively searched for the next step, exhausted the useful actions that fit in this turn, and there is truly nothing meaningful left to do here except deliberate handoff while the overall goal still remains active."
                 .to_string(),
         )
     };
@@ -1041,7 +1041,7 @@ fn build_non_stop_supervisor_prompt(checkpoint: &NonStopCheckpoint) -> String {
         "Continue making progress on the current non-stop goal from the existing thread state.",
     );
     let mut prompt = format!(
-        "Resume Non-stop execution toward the active goal.\nGoal: {goal}\nReview the existing thread state, avoid redoing finished work, and immediately choose the next highest-leverage concrete task. Treat the goal as an end-to-end delivery contract, not merely the next subtask. Before ending this turn, audit what user-visible deliverables, verification, and clearly implied cleanup, tests, or documentation still remain. Treat the goal as still incomplete unless you can now verify that the user's requested outcome is actually achieved end to end."
+        "Resume Non-stop execution toward the active goal.\nGoal: {goal}\nReview the existing thread state, avoid redoing finished work, and immediately choose the next highest-leverage concrete task. Treat the goal as an end-to-end delivery contract, not merely the next subtask. Before ending this turn, audit what user-visible deliverables, verification, and clearly implied cleanup, tests, or documentation still remain. Treat the goal as still incomplete unless you can now verify that the user's requested outcome is actually achieved end to end. If you can identify a concrete next step that fits in this turn, execute it instead of ending with suggestions, remaining-work notes, or a recommendation list. Use <task_complete>...</task_complete> only if you have actively searched for the next step, exhausted the useful actions that fit in this turn, and there is truly nothing meaningful left to do here except deliberate handoff while the overall goal still remains active."
     );
     if let Some(budget_summary) = non_stop_budget_summary(checkpoint) {
         prompt.push_str(&format!("\nTime budget: {budget_summary}"));
@@ -1087,7 +1087,7 @@ fn build_non_stop_supervisor_prompt(checkpoint: &NonStopCheckpoint) -> String {
         == Some(NonStopCheckpointControlSignal::TaskComplete)
     {
         prompt.push_str(
-            "\nThe previous turn ended with <task_complete>, which in Non-stop means the turn finished a concrete step but the overall goal still remains active. Do not stop at the next convenient boundary. Use this turn to close the next highest-leverage gap toward end-to-end completion, and only emit another <task_complete> after you have exhausted the useful actions that fit in this turn.",
+            "\nThe previous turn ended with <task_complete>, which in Non-stop means the turn finished a concrete step but the overall goal still remains active. Do not stop at the next convenient boundary. Use this turn to close the next highest-leverage gap toward end-to-end completion, and only emit another <task_complete> after you have exhausted the useful actions that fit in this turn. Do not end with a recommendations list when you already know how to execute the next step yourself.",
         );
     }
     if checkpoint.consecutive_task_complete_turns >= 2 {
@@ -1754,6 +1754,8 @@ mod tests {
         assert!(prompt.contains("remaining out of 2h"));
         assert!(prompt.contains("end-to-end delivery contract"));
         assert!(prompt.contains("clearly implied cleanup, tests, or documentation"));
+        assert!(prompt.contains("execute it instead of ending with suggestions"));
+        assert!(prompt.contains("actively searched for the next step"));
 
         checkpoint.self_directed_innovation_enabled = false;
         let prompt_without_flag = build_non_stop_supervisor_prompt(&checkpoint);
@@ -1777,6 +1779,8 @@ mod tests {
         assert!(prompt.contains("next highest-leverage gap toward end-to-end completion"));
         assert!(prompt.contains("exhausted the useful actions that fit in this turn"));
         assert!(prompt.contains("achieved and verified end to end"));
+        assert!(prompt.contains("Do not end with a recommendations list"));
+        assert!(prompt.contains("actively searched for the next step"));
     }
 
     #[test]

@@ -1487,6 +1487,12 @@ impl App {
         snapshot: ThreadEventSnapshot,
         resume_restored_queue: bool,
     ) {
+        let replay_caught_up = snapshot.events.iter().any(|event| {
+            matches!(
+                event.msg,
+                EventMsg::TurnStarted(_) | EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)
+            )
+        });
         if let Some(event) = snapshot.session_configured {
             self.handle_codex_event_replay(event);
         }
@@ -1497,7 +1503,7 @@ impl App {
             self.handle_codex_event_replay(event);
         }
         self.chat_widget.set_queue_autosend_suppressed(false);
-        if resume_restored_queue {
+        if resume_restored_queue && replay_caught_up {
             self.chat_widget
                 .restore_pending_input_to_composer_after_replay();
         }

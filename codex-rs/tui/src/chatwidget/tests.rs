@@ -1893,6 +1893,7 @@ async fn make_chatwidget_manual(
         unified_exec_processes: Vec::new(),
         pending_turn_start: false,
         agent_turn_running: false,
+        active_turn_id: None,
         mcp_startup_status: None,
         connectors_cache: ConnectorsCacheState::default(),
         connectors_prefetch_in_flight: false,
@@ -3705,6 +3706,7 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
         agent_turn_running: true,
+        active_turn_id: Some("turn-1".to_string()),
         standalone_user_shell_turn_running: false,
     }));
 
@@ -3717,6 +3719,61 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
     assert!(!chat.agent_turn_running);
     assert!(!chat.turn_sleep_inhibitor.is_turn_running());
     assert!(!chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
+async fn stale_replayed_turn_complete_does_not_clear_restored_running_turn() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.restore_thread_input_state(Some(ThreadInputState {
+        composer: None,
+        pending_steers: VecDeque::new(),
+        queued_user_messages: VecDeque::new(),
+        current_collaboration_mode: chat.current_collaboration_mode.clone(),
+        active_collaboration_mask: chat.active_collaboration_mask.clone(),
+        agent_turn_running: true,
+        active_turn_id: Some("turn-1".to_string()),
+        standalone_user_shell_turn_running: false,
+    }));
+
+    chat.handle_codex_event_replay(Event {
+        id: "turn-0-complete".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-0".to_string(),
+            last_agent_message: None,
+            completion_reason: codex_protocol::protocol::TurnCompleteReason::Completed,
+        }),
+    });
+
+    assert!(chat.agent_turn_running);
+    assert_eq!(chat.active_turn_id.as_deref(), Some("turn-1"));
+    assert!(chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
+async fn stale_replayed_turn_aborted_does_not_clear_restored_running_turn() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.restore_thread_input_state(Some(ThreadInputState {
+        composer: None,
+        pending_steers: VecDeque::new(),
+        queued_user_messages: VecDeque::new(),
+        current_collaboration_mode: chat.current_collaboration_mode.clone(),
+        active_collaboration_mask: chat.active_collaboration_mask.clone(),
+        agent_turn_running: true,
+        active_turn_id: Some("turn-1".to_string()),
+        standalone_user_shell_turn_running: false,
+    }));
+
+    chat.handle_codex_event_replay(Event {
+        id: "turn-0-aborted".into(),
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some("turn-0".to_string()),
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    assert!(chat.agent_turn_running);
+    assert_eq!(chat.active_turn_id.as_deref(), Some("turn-1"));
+    assert!(chat.bottom_pane.is_task_running());
 }
 
 #[tokio::test]
@@ -5138,6 +5195,85 @@ async fn unified_exec_interaction_after_task_complete_is_suppressed() {
         cells.is_empty(),
         "expected unified exec interaction after task complete to be suppressed"
     );
+}
+
+#[tokio::test]
+async fn unified_exec_begin_after_task_complete_is_suppressed() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    chat.on_task_complete(None, false);
+
+    chat.handle_codex_event(Event {
+        id: "call-1".to_string(),
+        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: "call-1".to_string(),
+            process_id: Some("proc-1".to_string()),
+            turn_id: "turn-1".to_string(),
+            command: vec!["bash".to_string(), "-lc".to_string(), "sleep 5".to_string()],
+            cwd: std::env::current_dir().expect("cwd"),
+            parsed_cmd: Vec::new(),
+            source: ExecCommandSource::UnifiedExecInteraction,
+            interaction_input: None,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "expected no history after delayed exec begin"
+    );
+    assert!(chat.active_cell.is_none());
+    assert!(chat.bottom_pane.status_widget().is_none());
+    assert!(chat.running_commands.is_empty());
+}
+
+#[tokio::test]
+async fn mcp_begin_after_task_complete_is_suppressed() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    chat.on_task_complete(None, false);
+
+    chat.handle_codex_event(Event {
+        id: "mcp-1".to_string(),
+        msg: EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
+            call_id: "mcp-1".to_string(),
+            invocation: codex_protocol::protocol::McpInvocation {
+                server: "server".to_string(),
+                tool: "tool".to_string(),
+                arguments: Some(serde_json::json!({"x": 1})),
+            },
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "expected no history after delayed mcp begin"
+    );
+    assert!(chat.active_cell.is_none());
+    assert!(chat.bottom_pane.status_widget().is_none());
+}
+
+#[tokio::test]
+async fn background_event_after_task_complete_is_suppressed() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    chat.on_task_complete(None, false);
+
+    chat.handle_codex_event(Event {
+        id: "bg-1".to_string(),
+        msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+            message: "Still working...".to_string(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "expected no history after delayed background event"
+    );
+    assert!(chat.bottom_pane.status_widget().is_none());
+    assert!(!chat.bottom_pane.is_task_running());
 }
 
 #[tokio::test]

@@ -2,8 +2,6 @@ name: rust-ci
 on:
   pull_request: {}
   push:
-    branches:
-      - main
   workflow_dispatch:
 
 # CI builds in debug (dev) for faster signal.
