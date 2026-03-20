@@ -29,9 +29,11 @@ jobs:
 
       # stage_npm_packages.py requires DotSlash when staging releases.
       - uses: facebook/install-dotslash@v2
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
 
       - name: Stage npm package
         id: stage_npm_package
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -47,6 +49,7 @@ jobs:
 
       - name: Upload staged npm package artifact
         uses: actions/upload-artifact@v7
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
         with:
           name: codex-npm-staging
           path: ${{ steps.stage_npm_package.outputs.pack_output }}
