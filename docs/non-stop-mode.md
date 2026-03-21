@@ -84,6 +84,11 @@ input is actually required.
 practice:
 
 - an ordinary response completion should keep the turn moving
+- when the user sends a new explicit request, Non-stop should treat that new
+  request as the immediate priority for the next turn
+- a new explicit request should not automatically discard older unfinished work;
+  older work is dropped only when the new request clearly changes direction or
+  replaces it
 - `<await_user_input>` remains the blocker stop signal
 - `<task_complete>` in `Non-stop` should end the current turn while keeping the
   active goal alive

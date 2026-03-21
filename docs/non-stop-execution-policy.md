@@ -21,6 +21,10 @@ The default outcome after a response finishes is therefore:
 - continue if there is uncertainty but a small validating action is available
 - continue if the current turn is done but the user's goal still needs further
   monitoring, verification, or retries
+- when a new explicit user request arrives, prioritize that new request
+  immediately instead of letting unfinished older work dominate the next turn
+- a new request does not automatically drop older unfinished work; only treat
+  older work as superseded when the new request clearly replaces or redirects it
 - continue with bounded self-directed innovation only after it is recorded,
   checked for scope / time budget / risk, and still meaningfully advances the goal
 - stop only for hard blockers or after an explicit "the user's requested
