@@ -6035,6 +6035,14 @@ fn apply_interactive_non_stop_new_user_turn_override(
     {
         return mode;
     }
+    if mode
+        .settings
+        .developer_instructions
+        .as_deref()
+        .is_some_and(|text| text.contains(INTERACTIVE_NON_STOP_NEW_USER_TURN_INSTRUCTIONS))
+    {
+        return mode;
+    }
     let merged = match mode
         .settings
         .developer_instructions
@@ -7118,6 +7126,7 @@ mod tests {
             cli_mode
                 .settings
                 .developer_instructions
+                .as_deref()
                 .expect("instructions")
                 .contains("do not automatically abandon older unfinished work")
         );
@@ -7139,6 +7148,12 @@ mod tests {
             long_run.settings.developer_instructions,
             base.settings.developer_instructions
         );
+
+        let deduped = apply_interactive_non_stop_new_user_turn_override(
+            cli_mode.clone(),
+            &SessionSource::Cli,
+        );
+        assert_eq!(deduped, cli_mode);
     }
 
     #[tokio::test]
