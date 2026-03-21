@@ -7141,6 +7141,98 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn interactive_non_stop_user_turn_updates_turn_context_instructions() {
+        let mut session_configuration = make_session_configuration_for_tests().await;
+        session_configuration.session_source = SessionSource::Cli;
+        session_configuration.collaboration_mode = CollaborationMode {
+            mode: ModeKind::NonStop,
+            settings: Settings {
+                model: "gpt-5.4".to_string(),
+                reasoning_effort: None,
+                developer_instructions: None,
+            },
+        };
+
+        let config = session_configuration.original_config_do_not_use.clone();
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let models_manager = Arc::new(ModelsManager::new(
+            config.codex_home.clone(),
+            auth_manager.clone(),
+            None,
+            CollaborationModesConfig::default(),
+        ));
+        let (tx_event, _rx_event) = async_channel::unbounded();
+        let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+        let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
+        let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
+        let skills_manager = Arc::new(SkillsManager::new(
+            config.codex_home.clone(),
+            Arc::clone(&plugins_manager),
+        ));
+        let session = Arc::new(
+            Session::new(
+                session_configuration,
+                config.clone(),
+                auth_manager,
+                models_manager,
+                ExecPolicyManager::default(),
+                tx_event,
+                agent_status_tx,
+                InitialHistory::New,
+                SessionSource::Cli,
+                skills_manager,
+                plugins_manager,
+                mcp_manager,
+                Arc::new(FileWatcher::noop()),
+                AgentControl::default(),
+            )
+            .await
+            .expect("session"),
+        );
+
+        handlers::user_input_or_turn(
+            &session,
+            "sub-id".to_string(),
+            Op::UserTurn {
+                items: vec![UserInput::Text {
+                    text: "new request".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                cwd: config.cwd.clone(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::DangerFullAccess,
+                model: "gpt-5.4".to_string(),
+                effort: None,
+                summary: None,
+                service_tier: None,
+                final_output_json_schema: None,
+                collaboration_mode: Some(CollaborationMode {
+                    mode: ModeKind::NonStop,
+                    settings: Settings {
+                        model: "gpt-5.4".to_string(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                personality: None,
+            },
+        )
+        .await;
+
+        let state = session.state.lock().await;
+        let instructions = state
+            .session_configuration
+            .collaboration_mode
+            .settings
+            .developer_instructions
+            .clone()
+            .expect("developer instructions");
+        assert!(instructions.contains("Prioritize the newly requested work immediately"));
+        assert!(instructions.contains("do not automatically abandon older unfinished work"));
+    }
+
     struct InstructionsTestCase {
         slug: &'static str,
         expects_apply_patch_instructions: bool,
