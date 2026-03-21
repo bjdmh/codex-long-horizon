@@ -193,7 +193,7 @@ This is still the most likely place to inspect next. The exact question is:
 - does `RegularTask::run` block inside `sess.on_task_finished(...)`
 - and if yes, on what awaited operation?
 
-The best next step is to temporarily add *minimal* step-by-step logs inside
+The best next step is to temporarily add _minimal_ step-by-step logs inside
 `on_task_finished()` and remove them once the culprit is identified.
 
 ### B. `TurnComplete` is being generated but not consumed by exec
@@ -204,7 +204,7 @@ If `on_task_finished()` completes, the next suspect is:
 - `send_event_raw(...)`
 - `codex-exec` event loop handling for `TurnComplete`
 
-But this should only be investigated *after* confirming whether
+But this should only be investigated _after_ confirming whether
 `on_task_finished()` returns.
 
 ### C. Event ordering vs. prioritized terminal delivery
@@ -227,6 +227,7 @@ isolated.
 ## Recommended next steps
 
 1. Add precise logs inside `Session::on_task_finished(...)`:
+
    - entered
    - after active-turn removal
    - before replaying pending input
@@ -236,10 +237,12 @@ isolated.
 2. Re-run the minimal direct `codex-exec --non-stop` reproduction.
 
 3. If `on_task_finished()` never returns:
+
    - identify the specific awaited call
    - move or relax that awaited work off the critical turn-completion path
 
 4. If `on_task_finished()` does return:
+
    - instrument `codex-exec` around the `TurnComplete` receive path
    - confirm whether `CodexStatus::InitiateShutdown` and `ShutdownComplete`
      are actually observed
