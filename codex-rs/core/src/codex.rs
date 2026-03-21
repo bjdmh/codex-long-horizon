@@ -4090,19 +4090,21 @@ mod handlers {
                 collaboration_mode,
                 personality,
             } => {
-                let collaboration_mode = if let Some(collaboration_mode) = collaboration_mode {
-                    Some(collaboration_mode)
-                } else {
-                    let current_collaboration_mode = {
-                        let state = sess.state.lock().await;
-                        state.session_configuration.collaboration_mode.clone()
-                    };
-                    Some(current_collaboration_mode.with_updates(
-                        Some(model.clone()),
-                        Some(effort),
-                        None,
-                    ))
+                let (current_collaboration_mode, session_source) = {
+                    let state = sess.state.lock().await;
+                    (
+                        state.session_configuration.collaboration_mode.clone(),
+                        state.session_configuration.session_source.clone(),
+                    )
                 };
+                let collaboration_mode = collaboration_mode.unwrap_or_else(|| {
+                    current_collaboration_mode.with_updates(Some(model.clone()), Some(effort), None)
+                });
+                let collaboration_mode =
+                    Some(super::apply_interactive_non_stop_new_user_turn_override(
+                        collaboration_mode,
+                        &session_source,
+                    ));
                 (
                     items,
                     SessionSettingsUpdate {
@@ -6006,6 +6008,7 @@ const NON_STOP_AUTO_CONTINUATION_LIMIT: usize = 256;
 const EXECUTE_STALL_ESCALATION_THRESHOLD: usize = 1;
 const EXECUTE_STALL_LIMIT: usize = 4;
 const TERMINAL_SIGNAL_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+const INTERACTIVE_NON_STOP_NEW_USER_TURN_INSTRUCTIONS: &str = "The user has now provided a new explicit request for this turn. Prioritize the newly requested work immediately. Do not let recap or continuation of an older task slow down the new request. However, do not automatically abandon older unfinished work just because a new request arrived. If the new request is an obvious change of direction or replacement for the prior task, then treat the prior task as superseded. If the new request is an additional requirement or follow-up that can coexist with the prior task, keep the older task in scope after you satisfy the new request.";
 
 const fn autonomous_auto_continuation_limit(mode: ModeKind) -> usize {
     match mode {
@@ -6021,6 +6024,31 @@ fn should_continue_in_turn_for_non_stop_task_complete(
 ) -> bool {
     mode == ModeKind::NonStop
         && matches!(session_source, SessionSource::Cli | SessionSource::VSCode)
+}
+
+fn apply_interactive_non_stop_new_user_turn_override(
+    mut mode: CollaborationMode,
+    session_source: &SessionSource,
+) -> CollaborationMode {
+    if mode.mode != ModeKind::NonStop
+        || !matches!(session_source, SessionSource::Cli | SessionSource::VSCode)
+    {
+        return mode;
+    }
+    let merged = match mode
+        .settings
+        .developer_instructions
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+    {
+        Some(existing) => {
+            format!("{existing}\n\n{INTERACTIVE_NON_STOP_NEW_USER_TURN_INSTRUCTIONS}")
+        }
+        None => INTERACTIVE_NON_STOP_NEW_USER_TURN_INSTRUCTIONS.to_string(),
+    };
+    mode.settings.developer_instructions = Some(merged);
+    mode
 }
 
 /// Ephemeral per-response state for streaming a single proposed plan.
@@ -7072,6 +7100,45 @@ mod tests {
             ModeKind::LongRun,
             &SessionSource::Cli,
         ));
+    }
+
+    #[test]
+    fn interactive_non_stop_new_turn_override_only_applies_to_interactive_non_stop() {
+        let base = CollaborationMode {
+            mode: ModeKind::NonStop,
+            settings: Settings {
+                model: "gpt-5.4".to_string(),
+                reasoning_effort: None,
+                developer_instructions: Some("base".to_string()),
+            },
+        };
+        let cli_mode =
+            apply_interactive_non_stop_new_user_turn_override(base.clone(), &SessionSource::Cli);
+        assert!(
+            cli_mode
+                .settings
+                .developer_instructions
+                .expect("instructions")
+                .contains("do not automatically abandon older unfinished work")
+        );
+
+        let exec_mode =
+            apply_interactive_non_stop_new_user_turn_override(base.clone(), &SessionSource::Exec);
+        assert_eq!(exec_mode, base);
+
+        let long_run = CollaborationMode {
+            mode: ModeKind::LongRun,
+            settings: base.settings.clone(),
+        };
+        let long_run = apply_interactive_non_stop_new_user_turn_override(
+            long_run.clone(),
+            &SessionSource::Cli,
+        );
+        assert_eq!(long_run.mode, ModeKind::LongRun);
+        assert_eq!(
+            long_run.settings.developer_instructions,
+            base.settings.developer_instructions
+        );
     }
 
     struct InstructionsTestCase {
