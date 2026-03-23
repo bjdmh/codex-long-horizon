@@ -4076,7 +4076,7 @@ mod handlers {
     }
 
     pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
-        let (items, updates) = match op {
+        let (items, updates, should_steer_existing_turn) = match op {
             Op::UserTurn {
                 cwd,
                 approval_policy,
@@ -4119,6 +4119,7 @@ mod handlers {
                         personality,
                         app_server_client_name: None,
                     },
+                    false,
                 )
             }
             Op::UserInput {
@@ -4130,6 +4131,7 @@ mod handlers {
                     final_output_json_schema: Some(final_output_json_schema),
                     ..Default::default()
                 },
+                true,
             ),
             _ => unreachable!(),
         };
@@ -4142,8 +4144,20 @@ mod handlers {
             .await;
         current_context.otel_manager.user_prompt(&items);
 
-        // Attempt to inject input into current task.
-        if let Err(SteerInputError::NoActiveTurn(items)) = sess.steer_input(items, None).await {
+        if should_steer_existing_turn {
+            // `Op::UserInput` is follow-up input for the current turn, so try to inject it into the
+            // active task first and only start a new task if the turn has already ended.
+            if let Err(SteerInputError::NoActiveTurn(items)) = sess.steer_input(items, None).await {
+                sess.refresh_mcp_servers_if_requested(&current_context)
+                    .await;
+                let regular_task = sess.take_startup_regular_task().await.unwrap_or_default();
+                sess.spawn_task(Arc::clone(&current_context), items, regular_task)
+                    .await;
+            }
+        } else {
+            // `Op::UserTurn` is an explicit new turn. Never steer it into the previous active turn,
+            // because that can race with terminal turn cleanup and strand the input in
+            // `pending_input` without starting the intended next turn.
             sess.refresh_mcp_servers_if_requested(&current_context)
                 .await;
             let regular_task = sess.take_startup_regular_task().await.unwrap_or_default();
@@ -10581,6 +10595,61 @@ mod tests {
 
         assert_eq!(turn_id, tc.sub_id);
         assert!(sess.has_pending_input().await);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn explicit_user_turn_replaces_active_turn_instead_of_buffering_pending_input() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+
+        handlers::user_input_or_turn(
+            &sess,
+            "replacement-turn".to_string(),
+            Op::UserTurn {
+                items: vec![UserInput::Text {
+                    text: "new request".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                cwd: tc.cwd.clone(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::DangerFullAccess,
+                model: "gpt-5.4".to_string(),
+                effort: None,
+                summary: None,
+                service_tier: None,
+                final_output_json_schema: None,
+                collaboration_mode: None,
+                personality: None,
+            },
+        )
+        .await;
+
+        assert!(
+            !sess.has_pending_input().await,
+            "explicit new turn should not be buffered into the previous active turn"
+        );
+        assert!(
+            sess.turn_context_for_sub_id(&tc.sub_id).await.is_none(),
+            "previous turn should be replaced"
+        );
+
+        let replacement = sess
+            .turn_context_for_sub_id("replacement-turn")
+            .await
+            .expect("replacement turn should be active");
+        assert_eq!(replacement.sub_id, "replacement-turn");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
