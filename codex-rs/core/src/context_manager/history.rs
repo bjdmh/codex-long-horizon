@@ -167,6 +167,36 @@ impl ContextManager {
         }
     }
 
+    pub(crate) fn strip_model_generated_segment_before_last_user_turn(&mut self) -> bool {
+        let user_positions = user_message_positions(&self.items);
+        let Some(&last_user_idx) = user_positions.last() else {
+            return false;
+        };
+        let previous_reply_start = user_positions
+            .iter()
+            .rev()
+            .nth(1)
+            .copied()
+            .map(|idx| idx + 1)
+            .unwrap_or(0);
+
+        let original_len = self.items.len();
+        self.items = self
+            .items
+            .drain(..)
+            .enumerate()
+            .filter_map(|(idx, item)| {
+                let in_previous_reply = idx >= previous_reply_start && idx < last_user_idx;
+                if in_previous_reply && is_model_generated_item(&item) {
+                    None
+                } else {
+                    Some(item)
+                }
+            })
+            .collect();
+        self.items.len() != original_len
+    }
+
     pub(crate) fn replace(&mut self, items: Vec<ResponseItem>) {
         self.items = items;
     }

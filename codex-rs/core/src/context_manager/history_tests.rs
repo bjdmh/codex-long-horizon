@@ -46,6 +46,22 @@ fn create_history_with_items(items: Vec<ResponseItem>) -> ContextManager {
     h
 }
 
+#[test]
+fn strip_model_generated_segment_before_last_user_turn_removes_previous_reply_only() {
+    let previous_user = user_input_text_msg("first task");
+    let previous_assistant = assistant_msg("completed summary");
+    let new_user = user_input_text_msg("new task");
+
+    let mut history = create_history_with_items(vec![
+        previous_user.clone(),
+        previous_assistant,
+        new_user.clone(),
+    ]);
+
+    assert!(history.strip_model_generated_segment_before_last_user_turn());
+    assert_eq!(history.raw_items(), &[previous_user, new_user]);
+}
+
 fn user_msg(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,

@@ -2045,6 +2045,16 @@ impl Session {
         state.set_previous_turn_completion_reason(previous_turn_completion_reason);
     }
 
+    pub(crate) async fn set_suppress_previous_turn_model_tail_for_next_turn(&self, value: bool) {
+        let mut state = self.state.lock().await;
+        state.set_suppress_previous_turn_model_tail_for_next_turn(value);
+    }
+
+    async fn take_suppress_previous_turn_model_tail_for_next_turn(&self) -> bool {
+        let mut state = self.state.lock().await;
+        state.take_suppress_previous_turn_model_tail_for_next_turn()
+    }
+
     fn maybe_refresh_shell_snapshot_for_cwd(
         &self,
         previous_cwd: &Path,
@@ -4043,6 +4053,7 @@ mod handlers {
     use codex_protocol::protocol::ThreadNameUpdatedEvent;
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
+    use codex_protocol::protocol::TurnCompleteReason;
     use codex_protocol::protocol::WarningEvent;
     use codex_protocol::request_user_input::RequestUserInputResponse;
 
@@ -4113,8 +4124,12 @@ mod handlers {
                     Some(super::apply_interactive_non_stop_new_user_turn_override(
                         collaboration_mode,
                         &session_source,
-                        previous_turn_completion_reason,
+                        previous_turn_completion_reason.clone(),
                     ));
+                if previous_turn_completion_reason == Some(TurnCompleteReason::NoMoreWork) {
+                    sess.set_suppress_previous_turn_model_tail_for_next_turn(true)
+                        .await;
+                }
                 (
                     items,
                     SessionSettingsUpdate {
@@ -5215,9 +5230,14 @@ pub(crate) async fn run_turn(
 
         // Construct the input that we will send to the model.
         let sampling_request_input: Vec<ResponseItem> = {
-            sess.clone_history()
+            let mut history = sess.clone_history().await;
+            if sess
+                .take_suppress_previous_turn_model_tail_for_next_turn()
                 .await
-                .for_prompt(&turn_context.model_info.input_modalities)
+            {
+                history.strip_model_generated_segment_before_last_user_turn();
+            }
+            history.for_prompt(&turn_context.model_info.input_modalities)
         };
 
         let sampling_request_input_messages = sampling_request_input
@@ -7388,6 +7408,78 @@ mod tests {
             .clone()
             .expect("developer instructions");
         assert!(instructions.contains("The previous turn already reached goal_complete"));
+    }
+
+    #[tokio::test]
+    async fn sampling_request_input_strips_previous_completed_turn_tail_once() {
+        let (session, turn_context) = make_session_and_context().await;
+
+        let previous_user = ResponseItem::Message {
+            id: Some("u1".to_string()),
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "finished task".to_string(),
+            }],
+            end_turn: Some(true),
+            phase: None,
+        };
+        let previous_assistant = ResponseItem::Message {
+            id: Some("a1".to_string()),
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "final summary from old task".to_string(),
+            }],
+            end_turn: Some(true),
+            phase: None,
+        };
+        let new_user = ResponseItem::Message {
+            id: Some("u2".to_string()),
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "new task".to_string(),
+            }],
+            end_turn: Some(true),
+            phase: None,
+        };
+
+        {
+            let mut state = session.state.lock().await;
+            state.record_items(
+                [&previous_user, &previous_assistant, &new_user],
+                turn_context.truncation_policy,
+            );
+            state.set_suppress_previous_turn_model_tail_for_next_turn(true);
+        }
+
+        let mut history = session.clone_history().await;
+        if session
+            .take_suppress_previous_turn_model_tail_for_next_turn()
+            .await
+        {
+            history.strip_model_generated_segment_before_last_user_turn();
+        }
+        let prompt_items = history.for_prompt(&turn_context.model_info.input_modalities);
+
+        assert!(
+            prompt_items.iter().all(|item| {
+                !matches!(
+                    item,
+                    ResponseItem::Message { role, content, .. }
+                        if role == "assistant"
+                            && content == &vec![ContentItem::OutputText {
+                                text: "final summary from old task".to_string(),
+                            }]
+                )
+            }),
+            "expected previous completed turn tail to be removed from prompt context"
+        );
+
+        assert!(
+            !session
+                .take_suppress_previous_turn_model_tail_for_next_turn()
+                .await,
+            "suppression flag should be one-shot"
+        );
     }
 
     #[tokio::test]
