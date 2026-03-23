@@ -243,6 +243,8 @@ impl Session {
             *active = None;
         }
         drop(active);
+        self.set_previous_turn_completion_reason(Some(completion_reason.clone()))
+            .await;
         if !pending_input.is_empty() {
             let pending_response_items = pending_input
                 .into_iter()
@@ -417,6 +419,7 @@ impl Session {
             turn_id: Some(task.turn_context.sub_id.clone()),
             reason,
         });
+        self.set_previous_turn_completion_reason(None).await;
         self.send_event(task.turn_context.as_ref(), event).await;
     }
 }

@@ -2037,6 +2037,14 @@ impl Session {
         state.set_previous_turn_settings(previous_turn_settings);
     }
 
+    pub(crate) async fn set_previous_turn_completion_reason(
+        &self,
+        previous_turn_completion_reason: Option<TurnCompleteReason>,
+    ) {
+        let mut state = self.state.lock().await;
+        state.set_previous_turn_completion_reason(previous_turn_completion_reason);
+    }
+
     fn maybe_refresh_shell_snapshot_for_cwd(
         &self,
         previous_cwd: &Path,
@@ -4090,11 +4098,12 @@ mod handlers {
                 collaboration_mode,
                 personality,
             } => {
-                let (current_collaboration_mode, session_source) = {
+                let (current_collaboration_mode, session_source, previous_turn_completion_reason) = {
                     let state = sess.state.lock().await;
                     (
                         state.session_configuration.collaboration_mode.clone(),
                         state.session_configuration.session_source.clone(),
+                        state.previous_turn_completion_reason(),
                     )
                 };
                 let collaboration_mode = collaboration_mode.unwrap_or_else(|| {
@@ -4104,6 +4113,7 @@ mod handlers {
                     Some(super::apply_interactive_non_stop_new_user_turn_override(
                         collaboration_mode,
                         &session_source,
+                        previous_turn_completion_reason,
                     ));
                 (
                     items,
@@ -6022,7 +6032,8 @@ const NON_STOP_AUTO_CONTINUATION_LIMIT: usize = 256;
 const EXECUTE_STALL_ESCALATION_THRESHOLD: usize = 1;
 const EXECUTE_STALL_LIMIT: usize = 4;
 const TERMINAL_SIGNAL_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
-const INTERACTIVE_NON_STOP_NEW_USER_TURN_INSTRUCTIONS: &str = "The user has now provided a new explicit request for this turn. Prioritize the newly requested work immediately. Do not let recap or continuation of an older task slow down the new request. However, do not automatically abandon older unfinished work just because a new request arrived. If the new request is an obvious change of direction or replacement for the prior task, then treat the prior task as superseded. If the new request is an additional requirement or follow-up that can coexist with the prior task, keep the older task in scope after you satisfy the new request.";
+const INTERACTIVE_NON_STOP_NEW_USER_TURN_INSTRUCTIONS: &str = "The user has now provided a new explicit request for this turn. Prioritize the newly requested work immediately. Treat the latest user request as the active task by default. Do not recap, continue, or preserve momentum on an older unfinished task unless the latest user message explicitly asks for it or clearly depends on it. If the new request is an obvious change of direction or replacement for the prior task, then treat the prior task as superseded. Only keep older unfinished work in scope when the latest request clearly coexists with it.";
+const INTERACTIVE_NON_STOP_PREVIOUS_GOAL_COMPLETE_INSTRUCTIONS: &str = "The previous turn already reached goal_complete. Do not continue, revisit, or clean up that completed task unless the latest user request explicitly asks you to do so.";
 
 const fn autonomous_auto_continuation_limit(mode: ModeKind) -> usize {
     match mode {
@@ -6043,6 +6054,7 @@ fn should_continue_in_turn_for_non_stop_task_complete(
 fn apply_interactive_non_stop_new_user_turn_override(
     mut mode: CollaborationMode,
     session_source: &SessionSource,
+    previous_turn_completion_reason: Option<TurnCompleteReason>,
 ) -> CollaborationMode {
     if mode.mode != ModeKind::NonStop
         || !matches!(session_source, SessionSource::Cli | SessionSource::VSCode)
@@ -6068,6 +6080,13 @@ fn apply_interactive_non_stop_new_user_turn_override(
             format!("{existing}\n\n{INTERACTIVE_NON_STOP_NEW_USER_TURN_INSTRUCTIONS}")
         }
         None => INTERACTIVE_NON_STOP_NEW_USER_TURN_INSTRUCTIONS.to_string(),
+    };
+    let merged = if previous_turn_completion_reason == Some(TurnCompleteReason::NoMoreWork)
+        && !merged.contains(INTERACTIVE_NON_STOP_PREVIOUS_GOAL_COMPLETE_INSTRUCTIONS)
+    {
+        format!("{merged}\n\n{INTERACTIVE_NON_STOP_PREVIOUS_GOAL_COMPLETE_INSTRUCTIONS}")
+    } else {
+        merged
     };
     mode.settings.developer_instructions = Some(merged);
     mode
@@ -7134,19 +7153,25 @@ mod tests {
                 developer_instructions: Some("base".to_string()),
             },
         };
-        let cli_mode =
-            apply_interactive_non_stop_new_user_turn_override(base.clone(), &SessionSource::Cli);
+        let cli_mode = apply_interactive_non_stop_new_user_turn_override(
+            base.clone(),
+            &SessionSource::Cli,
+            None,
+        );
         assert!(
             cli_mode
                 .settings
                 .developer_instructions
                 .as_deref()
                 .expect("instructions")
-                .contains("do not automatically abandon older unfinished work")
+                .contains("Treat the latest user request as the active task by default")
         );
 
-        let exec_mode =
-            apply_interactive_non_stop_new_user_turn_override(base.clone(), &SessionSource::Exec);
+        let exec_mode = apply_interactive_non_stop_new_user_turn_override(
+            base.clone(),
+            &SessionSource::Exec,
+            None,
+        );
         assert_eq!(exec_mode, base);
 
         let long_run = CollaborationMode {
@@ -7156,6 +7181,7 @@ mod tests {
         let long_run = apply_interactive_non_stop_new_user_turn_override(
             long_run.clone(),
             &SessionSource::Cli,
+            None,
         );
         assert_eq!(long_run.mode, ModeKind::LongRun);
         assert_eq!(
@@ -7166,6 +7192,7 @@ mod tests {
         let deduped = apply_interactive_non_stop_new_user_turn_override(
             cli_mode.clone(),
             &SessionSource::Cli,
+            None,
         );
         assert_eq!(deduped, cli_mode);
     }
@@ -7259,7 +7286,108 @@ mod tests {
             .clone()
             .expect("developer instructions");
         assert!(instructions.contains("Prioritize the newly requested work immediately"));
-        assert!(instructions.contains("do not automatically abandon older unfinished work"));
+        assert!(
+            instructions.contains("Treat the latest user request as the active task by default")
+        );
+        assert!(
+            instructions.contains(
+                "Do not recap, continue, or preserve momentum on an older unfinished task"
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn interactive_non_stop_user_turn_mentions_previous_goal_complete() {
+        let mut session_configuration = make_session_configuration_for_tests().await;
+        session_configuration.session_source = SessionSource::Cli;
+        session_configuration.collaboration_mode = CollaborationMode {
+            mode: ModeKind::NonStop,
+            settings: Settings {
+                model: "gpt-5.4".to_string(),
+                reasoning_effort: None,
+                developer_instructions: None,
+            },
+        };
+
+        let config = session_configuration.original_config_do_not_use.clone();
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let models_manager = Arc::new(ModelsManager::new(
+            config.codex_home.clone(),
+            auth_manager.clone(),
+            None,
+            CollaborationModesConfig::default(),
+        ));
+        let (tx_event, _rx_event) = async_channel::unbounded();
+        let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+        let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
+        let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
+        let skills_manager = Arc::new(SkillsManager::new(
+            config.codex_home.clone(),
+            Arc::clone(&plugins_manager),
+        ));
+        let session = Arc::new(
+            Session::new(
+                session_configuration,
+                config.clone(),
+                auth_manager,
+                models_manager,
+                ExecPolicyManager::default(),
+                tx_event,
+                agent_status_tx,
+                InitialHistory::New,
+                SessionSource::Cli,
+                skills_manager,
+                plugins_manager,
+                mcp_manager,
+                Arc::new(FileWatcher::noop()),
+                AgentControl::default(),
+            )
+            .await
+            .expect("session"),
+        );
+        session
+            .set_previous_turn_completion_reason(Some(TurnCompleteReason::NoMoreWork))
+            .await;
+
+        handlers::user_input_or_turn(
+            &session,
+            "sub-id".to_string(),
+            Op::UserTurn {
+                items: vec![UserInput::Text {
+                    text: "new request".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                cwd: config.cwd.clone(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::DangerFullAccess,
+                model: "gpt-5.4".to_string(),
+                effort: None,
+                summary: None,
+                service_tier: None,
+                final_output_json_schema: None,
+                collaboration_mode: Some(CollaborationMode {
+                    mode: ModeKind::NonStop,
+                    settings: Settings {
+                        model: "gpt-5.4".to_string(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                personality: None,
+            },
+        )
+        .await;
+
+        let state = session.state.lock().await;
+        let instructions = state
+            .session_configuration
+            .collaboration_mode
+            .settings
+            .developer_instructions
+            .clone()
+            .expect("developer instructions");
+        assert!(instructions.contains("The previous turn already reached goal_complete"));
     }
 
     #[tokio::test]

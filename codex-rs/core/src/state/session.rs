@@ -14,6 +14,7 @@ use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::tasks::RegularTask;
 use crate::truncate::TruncationPolicy;
+use codex_protocol::protocol::TurnCompleteReason;
 use codex_protocol::protocol::TurnContextItem;
 
 /// Persistent, session-scoped state previously stored directly on `Session`.
@@ -28,6 +29,8 @@ pub(crate) struct SessionState {
     /// model/realtime handling on subsequent regular turns (including full-context
     /// reinjection after resume or `/compact`).
     previous_turn_settings: Option<PreviousTurnSettings>,
+    /// Completion reason from the most recently finished turn.
+    previous_turn_completion_reason: Option<TurnCompleteReason>,
     /// Startup regular task pre-created during session initialization.
     pub(crate) startup_regular_task: Option<JoinHandle<CodexResult<RegularTask>>>,
     pub(crate) active_mcp_tool_selection: Option<Vec<String>>,
@@ -46,6 +49,7 @@ impl SessionState {
             dependency_env: HashMap::new(),
             mcp_dependency_prompted: HashSet::new(),
             previous_turn_settings: None,
+            previous_turn_completion_reason: None,
             startup_regular_task: None,
             active_mcp_tool_selection: None,
             active_connector_selection: HashSet::new(),
@@ -69,6 +73,17 @@ impl SessionState {
         previous_turn_settings: Option<PreviousTurnSettings>,
     ) {
         self.previous_turn_settings = previous_turn_settings;
+    }
+
+    pub(crate) fn previous_turn_completion_reason(&self) -> Option<TurnCompleteReason> {
+        self.previous_turn_completion_reason.clone()
+    }
+
+    pub(crate) fn set_previous_turn_completion_reason(
+        &mut self,
+        previous_turn_completion_reason: Option<TurnCompleteReason>,
+    ) {
+        self.previous_turn_completion_reason = previous_turn_completion_reason;
     }
 
     pub(crate) fn clone_history(&self) -> ContextManager {
