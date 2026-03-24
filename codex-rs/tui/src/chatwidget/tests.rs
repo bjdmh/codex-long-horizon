@@ -1961,6 +1961,19 @@ fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
     }
 }
 
+fn next_user_submission_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
+    loop {
+        match op_rx.try_recv() {
+            Ok(op @ Op::UserTurn { .. }) | Ok(op @ Op::UserInput { .. }) => return op,
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => panic!("expected a user submission op but queue was empty"),
+            Err(TryRecvError::Disconnected) => {
+                panic!("expected user submission op but channel closed")
+            }
+        }
+    }
+}
+
 fn next_user_shell_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> String {
     loop {
         match op_rx.try_recv() {
@@ -2956,18 +2969,10 @@ async fn submit_user_message_with_mode_allows_same_mode_during_running_turn() {
 
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
     assert!(chat.queued_user_messages.is_empty());
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
-            collaboration_mode:
-                Some(CollaborationMode {
-                    mode: ModeKind::Plan,
-                    ..
-                }),
-            personality: None,
-            ..
-        } => {}
+    match next_user_submission_op(&mut op_rx) {
+        Op::UserInput { .. } => {}
         other => {
-            panic!("expected Op::UserTurn with plan collab mode, got {other:?}")
+            panic!("expected Op::UserInput while steering running turn, got {other:?}")
         }
     }
 }
@@ -3194,15 +3199,15 @@ async fn plan_implementation_popup_skips_when_steer_follows_proposed_plan() {
         .set_composer_text("Please continue.".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
+    match next_user_submission_op(&mut op_rx) {
+        Op::UserInput { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
                 text: "Please continue.".to_string(),
                 text_elements: Vec::new(),
             }]
         ),
-        other => panic!("expected Op::UserTurn, got {other:?}"),
+        other => panic!("expected Op::UserInput, got {other:?}"),
     }
 
     complete_user_message(&mut chat, "user-1", "Please continue.");
@@ -3235,15 +3240,15 @@ async fn plan_implementation_popup_shows_after_new_plan_follows_steer() {
         .set_composer_text("Please revise.".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
+    match next_user_submission_op(&mut op_rx) {
+        Op::UserInput { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
                 text: "Please revise.".to_string(),
                 text_elements: Vec::new(),
             }]
         ),
-        other => panic!("expected Op::UserTurn, got {other:?}"),
+        other => panic!("expected Op::UserInput, got {other:?}"),
     }
 
     complete_user_message(&mut chat, "user-1", "Please revise.");
@@ -4127,9 +4132,9 @@ async fn steer_enter_uses_pending_steers_while_turn_is_running_without_streaming
         chat.pending_steers.front().unwrap().user_message.text,
         "queued while running"
     );
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn { .. } => {}
-        other => panic!("expected Op::UserTurn, got {other:?}"),
+    match next_user_submission_op(&mut op_rx) {
+        Op::UserInput { .. } => {}
+        other => panic!("expected Op::UserInput, got {other:?}"),
     }
     assert!(drain_insert_history(&mut rx).is_empty());
 
@@ -4331,9 +4336,9 @@ async fn item_completed_pops_pending_steer_with_local_image_and_text_elements() 
         mention_bindings: Vec::new(),
     });
 
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn { .. } => {}
-        other => panic!("expected Op::UserTurn, got {other:?}"),
+    match next_user_submission_op(&mut op_rx) {
+        Op::UserInput { .. } => {}
+        other => panic!("expected Op::UserInput, got {other:?}"),
     }
 
     assert_eq!(chat.pending_steers.len(), 1);
@@ -4534,15 +4539,15 @@ async fn manual_interrupt_restores_pending_steers_before_queued_messages() {
         .push_back(UserMessage::from("queued draft".to_string()));
     chat.refresh_pending_input_preview();
 
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
+    match next_user_submission_op(&mut op_rx) {
+        Op::UserInput { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
                 text: "pending steer".to_string(),
                 text_elements: Vec::new(),
             }]
         ),
-        other => panic!("expected Op::UserTurn, got {other:?}"),
+        other => panic!("expected Op::UserInput, got {other:?}"),
     }
     assert!(drain_insert_history(&mut rx).is_empty());
 
@@ -4571,15 +4576,15 @@ async fn replaced_turn_clears_pending_steers_but_keeps_queued_drafts() {
         .push_back(UserMessage::from("queued draft".to_string()));
     chat.refresh_pending_input_preview();
 
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
+    match next_user_submission_op(&mut op_rx) {
+        Op::UserInput { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
                 text: "pending steer".to_string(),
                 text_elements: Vec::new(),
             }]
         ),
-        other => panic!("expected Op::UserTurn, got {other:?}"),
+        other => panic!("expected Op::UserInput, got {other:?}"),
     }
     assert!(drain_insert_history(&mut rx).is_empty());
 
@@ -4622,12 +4627,9 @@ async fn enter_submits_when_plan_stream_is_not_active() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     assert!(chat.queued_user_messages.is_empty());
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
-            personality: Some(Personality::Pragmatic),
-            ..
-        } => {}
-        other => panic!("expected Op::UserTurn, got {other:?}"),
+    match next_user_submission_op(&mut op_rx) {
+        Op::UserInput { .. } => {}
+        other => panic!("expected Op::UserInput, got {other:?}"),
     }
 }
 
@@ -10148,7 +10150,9 @@ async fn auto_queue_duplicate_is_restored_instead_of_resubmitted() {
         other => panic!("expected first queued follow-up submission, got {other:?}"),
     }
 
+    chat.pending_turn_start = false;
     chat.agent_turn_running = false;
+    chat.update_task_running_state();
     chat.queued_user_messages.push_back(message);
     chat.maybe_send_next_queued_input();
 

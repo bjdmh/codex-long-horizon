@@ -4109,6 +4109,7 @@ mod handlers {
                 collaboration_mode,
                 personality,
             } => {
+                let replaces_active_turn = { sess.active_turn.lock().await.is_some() };
                 let (current_collaboration_mode, session_source, previous_turn_completion_reason) = {
                     let state = sess.state.lock().await;
                     (
@@ -4126,7 +4127,9 @@ mod handlers {
                         &session_source,
                         previous_turn_completion_reason.clone(),
                     ));
-                if previous_turn_completion_reason == Some(TurnCompleteReason::NoMoreWork) {
+                if replaces_active_turn
+                    || previous_turn_completion_reason == Some(TurnCompleteReason::NoMoreWork)
+                {
                     sess.set_suppress_previous_turn_model_tail_for_next_turn(true)
                         .await;
                 }
@@ -7198,11 +7201,8 @@ mod tests {
             mode: ModeKind::LongRun,
             settings: base.settings.clone(),
         };
-        let long_run = apply_interactive_non_stop_new_user_turn_override(
-            long_run.clone(),
-            &SessionSource::Cli,
-            None,
-        );
+        let long_run =
+            apply_interactive_non_stop_new_user_turn_override(long_run, &SessionSource::Cli, None);
         assert_eq!(long_run.mode, ModeKind::LongRun);
         assert_eq!(
             long_run.settings.developer_instructions,
@@ -10887,12 +10887,155 @@ mod tests {
             sess.turn_context_for_sub_id(&tc.sub_id).await.is_none(),
             "previous turn should be replaced"
         );
+        assert!(
+            sess.take_suppress_previous_turn_model_tail_for_next_turn()
+                .await,
+            "replacement turn should suppress the previous turn tail on the next prompt build"
+        );
+        assert!(
+            !sess
+                .take_suppress_previous_turn_model_tail_for_next_turn()
+                .await,
+            "suppression flag should remain one-shot"
+        );
 
         let replacement = sess
             .turn_context_for_sub_id("replacement-turn")
             .await
             .expect("replacement turn should be active");
         assert_eq!(replacement.sub_id, "replacement-turn");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn explicit_user_turn_replacement_strips_previous_turn_tail_from_prompt() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        let previous_user = ResponseItem::Message {
+            id: Some("u1".to_string()),
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "old task".to_string(),
+            }],
+            end_turn: Some(true),
+            phase: None,
+        };
+        let previous_tool_output = ResponseItem::CustomToolCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text("stale tool output".to_string()),
+        };
+        let previous_tool_call = ResponseItem::CustomToolCall {
+            id: None,
+            status: None,
+            call_id: "call-1".to_string(),
+            name: "shell".to_string(),
+            input: "{}".to_string(),
+        };
+        let previous_assistant = ResponseItem::Message {
+            id: Some("a1".to_string()),
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "stale summary".to_string(),
+            }],
+            end_turn: Some(true),
+            phase: None,
+        };
+        {
+            let mut state = sess.state.lock().await;
+            state.record_items(
+                [
+                    &previous_user,
+                    &previous_tool_call,
+                    &previous_tool_output,
+                    &previous_assistant,
+                ],
+                tc.truncation_policy,
+            );
+        }
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+
+        handlers::user_input_or_turn(
+            &sess,
+            "replacement-turn".to_string(),
+            Op::UserTurn {
+                items: vec![UserInput::Text {
+                    text: "new request".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                cwd: tc.cwd.clone(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::DangerFullAccess,
+                model: "gpt-5.4".to_string(),
+                effort: None,
+                summary: None,
+                service_tier: None,
+                final_output_json_schema: None,
+                collaboration_mode: None,
+                personality: None,
+            },
+        )
+        .await;
+
+        let replacement_user = ResponseItem::Message {
+            id: Some("u2".to_string()),
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "new request".to_string(),
+            }],
+            end_turn: Some(true),
+            phase: None,
+        };
+        {
+            let mut state = sess.state.lock().await;
+            state.record_items([&replacement_user], tc.truncation_policy);
+        }
+
+        let mut history = sess.clone_history().await;
+        if sess
+            .take_suppress_previous_turn_model_tail_for_next_turn()
+            .await
+        {
+            history.strip_model_generated_segment_before_last_user_turn();
+        }
+        let prompt_items = history.for_prompt(&tc.model_info.input_modalities);
+
+        assert!(
+            prompt_items.iter().all(|item| {
+                !matches!(
+                    item,
+                    ResponseItem::Message { role, content, .. }
+                        if role == "assistant"
+                            && content == &vec![ContentItem::OutputText {
+                                text: "stale summary".to_string(),
+                            }]
+                )
+            }),
+            "expected replaced turn prompt to drop previous assistant tail"
+        );
+        assert!(
+            prompt_items.iter().all(|item| {
+                !matches!(
+                    item,
+                    ResponseItem::CustomToolCallOutput { call_id, output }
+                        if call_id == "call-1"
+                            && output
+                                == &FunctionCallOutputPayload::from_text(
+                                    "stale tool output".to_string(),
+                                )
+                )
+            }),
+            "expected replaced turn prompt to drop previous tool output tail"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

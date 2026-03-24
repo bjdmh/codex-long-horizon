@@ -4685,18 +4685,25 @@ impl ChatWidget {
             .filter(|_| self.config.features.enabled(Feature::Personality))
             .filter(|_| self.current_model_supports_personality());
         let service_tier = self.config.service_tier.map(Some);
-        let op = Op::UserTurn {
-            items,
-            cwd: self.config.cwd.clone(),
-            approval_policy: self.config.permissions.approval_policy.value(),
-            sandbox_policy: self.config.permissions.sandbox_policy.get().clone(),
-            model: effective_mode.model().to_string(),
-            effort: effective_mode.reasoning_effort(),
-            summary: None,
-            service_tier,
-            final_output_json_schema: None,
-            collaboration_mode,
-            personality,
+        let op = if self.should_submit_as_follow_up_steer() {
+            Op::UserInput {
+                items,
+                final_output_json_schema: None,
+            }
+        } else {
+            Op::UserTurn {
+                items,
+                cwd: self.config.cwd.clone(),
+                approval_policy: self.config.permissions.approval_policy.value(),
+                sandbox_policy: self.config.permissions.sandbox_policy.get().clone(),
+                model: effective_mode.model().to_string(),
+                effort: effective_mode.reasoning_effort(),
+                summary: None,
+                service_tier,
+                final_output_json_schema: None,
+                collaboration_mode,
+                personality,
+            }
         };
 
         if !self.submit_op(op) {
@@ -8267,6 +8274,10 @@ impl ChatWidget {
 
     fn is_assistant_streaming_in_tui(&self) -> bool {
         self.stream_controller.is_some() || self.plan_stream_controller.is_some()
+    }
+
+    fn should_submit_as_follow_up_steer(&self) -> bool {
+        self.agent_turn_running && !self.is_assistant_streaming_in_tui()
     }
 
     pub(crate) fn composer_is_empty(&self) -> bool {

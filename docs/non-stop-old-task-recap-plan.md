@@ -38,12 +38,35 @@
   - 在下一次真正构造 prompt 前，
   - 一次性裁掉“上一轮 assistant 的模型生成尾部回复段”。
 - 目标是减少模型继续旧任务尾巴的上下文诱因，而不是只依赖提示词约束。
+- 当前实现已进一步扩展为：
+  - 如果新的显式 `UserTurn` 会**替换当前仍在运行的 active turn**，
+  - 同样会触发一次性旧回复段裁剪；
+  - 不再只限于上一轮自然结束为 `goal_complete` / `NoMoreWork` 的情况。
 
 当前代码锚点：
 
 - `codex-rs/core/src/state/session.rs`
 - `codex-rs/core/src/context_manager/history.rs`
 - `codex-rs/core/src/codex.rs`
+
+### 4. TUI 尾声 follow-up 改走 `UserInput`
+
+- 当 TUI 处于：
+  - `agent_turn_running == true`
+  - 且 `is_assistant_streaming_in_tui() == false`
+- 说明当前 turn 仍在运行，但已经不再流式输出；
+  这是最容易把用户 follow-up 错判成 replacement `UserTurn` 的窗口。
+- 当前实现已改为：
+  - 在这个窄窗口里，提交改走 `Op::UserInput`
+  - 也就是 steer 当前 turn，而不是 replacement `Op::UserTurn`
+- 这样可以减少：
+  - turn 尾声误替换旧任务
+  - 新任务 prompt 再被旧任务尾巴污染
+
+当前代码锚点：
+
+- `codex-rs/tui/src/chatwidget.rs`
+- `codex-rs/tui/src/chatwidget/tests.rs`
 
 ## 仍然存在的风险
 
@@ -60,6 +83,26 @@
 当前代码锚点：
 
 - `codex-rs/tui/src/chatwidget.rs`
+
+补充：
+
+- 经过进一步验证，**不能**粗暴把所有提交路径从 `streaming` 切成 `running`，因为这会打坏既有的：
+  - steer / pending_steers
+  - queued draft / auto replay
+  - plan implementation popup
+  - collaboration mode follow-up
+- 更可行的方向是：
+  - 仅对 **`agent_turn_running == true` 且 `streaming == false`** 的窄窗口，
+  - 把原本会走 replacement `UserTurn` 的提交改成 `UserInput` / steer；
+  - 保持“正在 streaming 时先 queue”和“idle 时新 `UserTurn`”两端语义不变。
+- 对照 `openai-codex`：
+  - upstream 仍以 `PendingSteer` + `Op::UserTurn` 为核心，
+  - 并在显式 `Interrupt` 后把 pending steers 合并重提；
+  - 这条逻辑对“中断后再 steer”很强，
+  - 但并不能直接解决“turn 尾声已不 streaming、却仍在 running”时被误判成 replacement turn 的问题。
+  - 因此这里采用的是更窄、更直接的修补：
+    - 只在该危险窗口把 follow-up 改成 `Op::UserInput`
+    - 而不是全量照搬 upstream 的 pending-steer / interrupt 语义
 
 ### 2. 上下文裁剪目前只处理上一轮 assistant 尾部
 
@@ -106,11 +149,16 @@
 
 计划：
 
-- 把前端对于“新任务 / follow-up / queue”的分流依据，从 `streaming` 迁移为真实 `running` 状态。
-- 优先使用：
-  - `bottom_pane.is_task_running()`
-  - `agent_turn_running`
-  - `pending_turn_start`
+- 不做“全量从 `streaming` 改成 `running`”的硬切换。
+- 改为只修正最关键的窄窗口：
+  - 当 `agent_turn_running == true`
+  - 且 `is_assistant_streaming_in_tui() == false`
+  - 把用户提交改走 `Op::UserInput`
+  - 也就是 follow-up steer，而不是 replacement `Op::UserTurn`
+- 继续保留：
+  - streaming 中的 queue 语义
+  - idle 状态下的新 `UserTurn`
+  - pending turn start 时仍按新 turn 处理
 
 建议优先检查代码：
 
@@ -171,4 +219,20 @@
 如果只选一个下一步，优先做：
 
 1. 用 `exec resume` 做同一 session 的多轮黑盒验证，确认旧任务 recap 具体残留在新任务的哪个阶段；
-2. 然后切 TUI 分流逻辑，从 `streaming` 改为 `running`。
+2. 然后优先把 TUI 在“running but not streaming”窗口的 follow-up 改走 `UserInput` / steer，而不是全量切 `running`。
+
+## 当前验证状态
+
+截至目前，以下结论已经有代码与定点测试支撑：
+
+- replacement `UserTurn` 会触发一次性旧回复段裁剪
+- replacement 场景下，新 prompt 会裁掉上一轮 assistant/tool 尾巴
+- TUI 在 `running == true && streaming == false` 的尾声窗口里，follow-up 已改走 `UserInput`
+- 相关 `codex-core` 与 `codex-tui` 定点回归已通过
+
+当前唯一尚未完成的高价值验证是：
+
+- **真实在线 `exec` / `exec resume` 黑盒**
+  - 当前环境下，OpenAI provider 请求返回 `403 Forbidden: Country, region, or territory not supported`
+  - 因此无法在本环境里完成“真实在线同 session 多轮验证”
+  - 若后续有可用 provider（例如受支持地区网络、可用 API 出口、或本地 OSS provider），应优先补做这一步
