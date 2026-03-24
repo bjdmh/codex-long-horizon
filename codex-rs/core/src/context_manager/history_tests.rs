@@ -38,6 +38,18 @@ fn assistant_msg(text: &str) -> ResponseItem {
     }
 }
 
+fn developer_msg(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: text.to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }
+}
+
 fn create_history_with_items(items: Vec<ResponseItem>) -> ContextManager {
     let mut h = ContextManager::new();
     // Use a generous but fixed token budget; tests only rely on truncation
@@ -50,11 +62,15 @@ fn create_history_with_items(items: Vec<ResponseItem>) -> ContextManager {
 fn strip_model_generated_segment_before_last_user_turn_removes_previous_reply_only() {
     let previous_user = user_input_text_msg("first task");
     let previous_assistant = assistant_msg("completed summary");
+    let previous_tool_output = custom_tool_call_output("call-1", "stale tool output");
+    let previous_developer = developer_msg("stale developer context");
     let new_user = user_input_text_msg("new task");
 
     let mut history = create_history_with_items(vec![
         previous_user.clone(),
         previous_assistant,
+        previous_tool_output,
+        previous_developer,
         new_user.clone(),
     ]);
 

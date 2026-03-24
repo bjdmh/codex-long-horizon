@@ -7423,6 +7423,10 @@ mod tests {
             end_turn: Some(true),
             phase: None,
         };
+        let previous_tool_output = ResponseItem::CustomToolCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text("stale tool output".to_string()),
+        };
         let previous_assistant = ResponseItem::Message {
             id: Some("a1".to_string()),
             role: "assistant".to_string(),
@@ -7445,7 +7449,12 @@ mod tests {
         {
             let mut state = session.state.lock().await;
             state.record_items(
-                [&previous_user, &previous_assistant, &new_user],
+                [
+                    &previous_user,
+                    &previous_tool_output,
+                    &previous_assistant,
+                    &new_user,
+                ],
                 turn_context.truncation_policy,
             );
             state.set_suppress_previous_turn_model_tail_for_next_turn(true);
@@ -7472,6 +7481,20 @@ mod tests {
                 )
             }),
             "expected previous completed turn tail to be removed from prompt context"
+        );
+        assert!(
+            prompt_items.iter().all(|item| {
+                !matches!(
+                    item,
+                    ResponseItem::CustomToolCallOutput { call_id, output }
+                        if call_id == "call-1"
+                            && output
+                                == &FunctionCallOutputPayload::from_text(
+                                    "stale tool output".to_string(),
+                                )
+                )
+            }),
+            "expected previous completed turn tool output to be removed from prompt context"
         );
 
         assert!(

@@ -187,7 +187,7 @@ impl ContextManager {
             .enumerate()
             .filter_map(|(idx, item)| {
                 let in_previous_reply = idx >= previous_reply_start && idx < last_user_idx;
-                if in_previous_reply && is_model_generated_item(&item) {
+                if in_previous_reply && is_previous_turn_reply_item(&item) {
                     None
                 } else {
                     Some(item)
@@ -640,10 +640,26 @@ fn is_model_generated_item(item: &ResponseItem) -> bool {
         | ResponseItem::CustomToolCall { .. }
         | ResponseItem::LocalShellCall { .. }
         | ResponseItem::Compaction { .. } => true,
-        ResponseItem::FunctionCallOutput { .. }
-        | ResponseItem::CustomToolCallOutput { .. }
-        | ResponseItem::GhostSnapshot { .. }
-        | ResponseItem::Other => false,
+        ResponseItem::GhostSnapshot { .. } | ResponseItem::Other => false,
+        ResponseItem::FunctionCallOutput { .. } | ResponseItem::CustomToolCallOutput { .. } => {
+            false
+        }
+    }
+}
+
+fn is_previous_turn_reply_item(item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::Message { role, .. } => role == "assistant" || role == "developer",
+        ResponseItem::Reasoning { .. }
+        | ResponseItem::FunctionCall { .. }
+        | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::ImageGenerationCall { .. }
+        | ResponseItem::CustomToolCall { .. }
+        | ResponseItem::LocalShellCall { .. }
+        | ResponseItem::Compaction { .. }
+        | ResponseItem::FunctionCallOutput { .. }
+        | ResponseItem::CustomToolCallOutput { .. } => true,
+        ResponseItem::GhostSnapshot { .. } | ResponseItem::Other => false,
     }
 }
 
