@@ -10,6 +10,52 @@
 2. **上下文构造层**：新任务 prompt 中仍可能保留旧任务 assistant 尾部内容。
 3. **模型行为层**：即使控制流切换正确，模型看到旧任务尾巴后仍倾向于“顺手总结一下”。
 
+## 里程碑记录
+
+### `v0.115.16`
+
+这个版本可以作为“旧任务回顾顽疾”治理的一个阶段性里程碑来记录。
+
+本版本已落地并验证的关键变化：
+
+- **core：replacement turn 裁旧尾巴**
+  - 当显式 `UserTurn` 替换当前活跃 turn 时，
+  - 下一次 prompt 构造前会一次性裁掉上一轮 assistant / tool 尾巴，
+  - 避免 replacement turn 继续吃到旧任务收尾上下文。
+
+- **tui：尾声 follow-up 改走 steer**
+  - 当 `agent_turn_running == true` 且 `streaming == false` 时，
+  - 用户 follow-up 改走 `Op::UserInput`，
+  - 不再轻易误走 replacement `Op::UserTurn`，
+  - 因而更接近用户预期的“正常 steer”，而不是
+    `Turn aborted: replaced by a new task`。
+
+- **Non-stop：完成语义再收紧**
+  - 明确要求：
+    - 整体目标完成时必须使用 `goal_complete`
+    - 不要在没有新的端到端工作的情况下反复输出 `task_complete`
+
+本版本已经通过的验证包括：
+
+- `codex-core` 关键回归通过
+- `codex-core` 全量仍只剩 2 个既有失败
+- `codex-tui` 关键 steer / popup / interrupt / queued draft / item completed 回归通过
+- `chatwidget::tests` 在跳过 4 个已确认无关的旁支失败后，
+  达到 `276 passed; 0 failed`
+- 使用 `CODEX_HOME=~/.paolu-codex` 的真实黑盒验证表明：
+  - 同 session 新任务不会继续回顾旧任务尾巴
+  - 最终输出中未再观察到
+    `replaced by a new task`
+
+建议以后回顾这个问题时，直接把 `v0.115.16` 视为：
+
+- **“显著缓解旧任务回顾问题的版本”**
+- 也是 **“replacement turn 污染 + 尾声误 replacement” 两条主根因首次同时被结构性收紧的版本”**
+
+建议发布时可直接使用下面这段 release note 文案：
+
+> `v0.115.16` significantly reduces Non-stop old-task recap by fixing replacement-turn tail leakage in core, routing running-but-not-streaming follow-ups through steer/`UserInput` in TUI, and tightening `goal_complete` vs `task_complete` completion guidance.
+
 ## 已完成治理
 
 ### 1. 新任务与旧 turn 解耦
