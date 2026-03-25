@@ -2,6 +2,8 @@ name: shell-tool-mcp CI
 
 on:
   push:
+    branches:
+      - "**"
     paths:
       - "shell-tool-mcp/**"
       - ".github/workflows/shell-tool-mcp-ci.yml"
