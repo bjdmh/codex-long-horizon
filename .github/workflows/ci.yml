@@ -2,9 +2,7 @@ name: ci
 
 on:
   pull_request: {}
-  push:
-    branches:
-      - "**"
+  push: {}
 
 jobs:
   build-test:

@@ -2,8 +2,6 @@ name: sdk
 
 on:
   push:
-    branches:
-      - "**"
   pull_request: {}
 
 jobs:
