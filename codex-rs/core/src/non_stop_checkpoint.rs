@@ -537,15 +537,79 @@ fn merge_innovation_candidates_from_item(
         return;
     };
     for candidate in parse_innovation_candidates(&text, source_turn_id) {
-        if checkpoint
+        if let Some(existing) = checkpoint
             .innovation_backlog
-            .iter()
-            .any(|existing| existing.id == candidate.id)
+            .iter_mut()
+            .find(|existing| innovation_candidates_match(existing, &candidate))
         {
+            merge_duplicate_innovation_candidate(existing, candidate);
             continue;
         }
         checkpoint.innovation_backlog.push(candidate);
     }
+}
+
+fn innovation_candidates_match(
+    existing: &NonStopInnovationTask,
+    candidate: &NonStopInnovationTask,
+) -> bool {
+    normalize_innovation_text(&existing.title) == normalize_innovation_text(&candidate.title)
+        && innovation_optional_text_matches(
+            existing.rationale.as_deref(),
+            candidate.rationale.as_deref(),
+        )
+        && innovation_optional_text_matches(
+            existing.relevance.as_deref(),
+            candidate.relevance.as_deref(),
+        )
+}
+
+fn merge_duplicate_innovation_candidate(
+    existing: &mut NonStopInnovationTask,
+    candidate: NonStopInnovationTask,
+) {
+    if existing.rationale.is_none() {
+        existing.rationale = candidate.rationale;
+    }
+    if existing.relevance.is_none() {
+        existing.relevance = candidate.relevance;
+    }
+    existing.estimated_duration_secs = match (
+        existing.estimated_duration_secs,
+        candidate.estimated_duration_secs,
+    ) {
+        (Some(existing_duration), Some(candidate_duration)) => {
+            Some(existing_duration.max(candidate_duration))
+        }
+        (Some(existing_duration), None) => Some(existing_duration),
+        (None, Some(candidate_duration)) => Some(candidate_duration),
+        (None, None) => None,
+    };
+    if innovation_risk_rank(candidate.risk) > innovation_risk_rank(existing.risk) {
+        existing.risk = candidate.risk;
+    }
+}
+
+fn normalize_optional_innovation_text(text: Option<&str>) -> Option<String> {
+    text.map(normalize_innovation_text)
+}
+
+fn innovation_optional_text_matches(existing: Option<&str>, candidate: Option<&str>) -> bool {
+    match (
+        normalize_optional_innovation_text(existing),
+        normalize_optional_innovation_text(candidate),
+    ) {
+        (Some(existing), Some(candidate)) => existing == candidate,
+        (Some(_), None) | (None, Some(_)) | (None, None) => true,
+    }
+}
+
+fn normalize_innovation_text(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_ascii_lowercase()
 }
 
 fn parse_innovation_candidates(
@@ -638,6 +702,16 @@ fn parse_innovation_risk(risk: &str) -> NonStopInnovationRisk {
         "high" => NonStopInnovationRisk::High,
         "critical" => NonStopInnovationRisk::Critical,
         _ => NonStopInnovationRisk::Unknown,
+    }
+}
+
+fn innovation_risk_rank(risk: NonStopInnovationRisk) -> u8 {
+    match risk {
+        NonStopInnovationRisk::Unknown => 0,
+        NonStopInnovationRisk::Low => 1,
+        NonStopInnovationRisk::Medium => 2,
+        NonStopInnovationRisk::High => 3,
+        NonStopInnovationRisk::Critical => 4,
     }
 }
 
@@ -787,6 +861,73 @@ mod tests {
         assert_eq!(candidate.estimated_duration_secs, Some(45 * 60));
         assert_eq!(candidate.risk, NonStopInnovationRisk::Medium);
         assert_eq!(candidate.source_turn_id.as_deref(), Some("turn-1"));
+    }
+
+    #[test]
+    fn duplicate_innovation_candidates_are_merged_by_content() {
+        let mut checkpoint = NonStopCheckpoint {
+            thread_id: ThreadId::new(),
+            turn_id: Some("turn-1".to_string()),
+            status: NonStopCheckpointStatus::Running,
+            collaboration_mode: ModeKind::NonStop,
+            model: "gpt-5.4".to_string(),
+            cwd: PathBuf::from("/tmp"),
+            session_source: SessionSource::Exec,
+            created_at: 1,
+            updated_at: 1,
+            goal_prompt: Some("keep improving the rollout".to_string()),
+            last_agent_message: None,
+            last_assistant_control_signal: None,
+            consecutive_task_complete_turns: 0,
+            last_user_input_at: None,
+            budget_window: None,
+            innovation_backlog: vec![NonStopInnovationTask {
+                id: "innovation-1".to_string(),
+                title: "Add a flaky-test detector".to_string(),
+                rationale: None,
+                relevance: Some("Keeps the active goal moving".to_string()),
+                estimated_duration_secs: Some(10 * 60),
+                risk: NonStopInnovationRisk::Low,
+                status: NonStopInnovationStatus::Proposed,
+                proposed_at: 1,
+                source_turn_id: Some("turn-1".to_string()),
+                rejection_reason: None,
+            }],
+            self_directed_innovation_enabled: true,
+        };
+
+        let duplicate = ResponseItem::Message {
+            id: Some("msg-1".to_string()),
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: r#"<innovation_candidate>{"title":" Add a flaky-test detector ","rationale":"Improve monitoring between explicit user asks","relevance":"Keeps the active goal moving","risk":"high","estimated_duration":"25m"}</innovation_candidate>"#.to_string(),
+            }],
+            end_turn: Some(true),
+            phase: None,
+        };
+
+        merge_innovation_candidates_from_item(
+            &mut checkpoint,
+            &duplicate,
+            Some("turn-2".to_string()),
+        );
+
+        assert_eq!(checkpoint.innovation_backlog.len(), 1);
+        assert_eq!(
+            checkpoint.innovation_backlog[0],
+            NonStopInnovationTask {
+                id: "innovation-1".to_string(),
+                title: "Add a flaky-test detector".to_string(),
+                rationale: Some("Improve monitoring between explicit user asks".to_string()),
+                relevance: Some("Keeps the active goal moving".to_string()),
+                estimated_duration_secs: Some(25 * 60),
+                risk: NonStopInnovationRisk::High,
+                status: NonStopInnovationStatus::Proposed,
+                proposed_at: 1,
+                source_turn_id: Some("turn-1".to_string()),
+                rejection_reason: None,
+            }
+        );
     }
 
     #[tokio::test]

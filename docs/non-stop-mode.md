@@ -117,6 +117,8 @@ Current implementation:
   before execution, then handed to the next `Non-stop` turn with `<task_complete>`
 - supervisor prompts surface remaining budget, pending innovation items, and lightweight
   risk checks that block only obviously high-risk or over-budget innovation ideas
+- repeated innovation candidates are deduplicated by content so the backlog stays concise,
+  while preserving stricter risk or duration metadata from later repeats
 
 ## Initial implementation plan
 
