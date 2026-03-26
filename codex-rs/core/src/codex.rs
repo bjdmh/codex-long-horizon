@@ -2045,14 +2045,19 @@ impl Session {
         state.set_previous_turn_completion_reason(previous_turn_completion_reason);
     }
 
-    pub(crate) async fn set_suppress_previous_turn_model_tail_for_next_turn(&self, value: bool) {
+    pub(crate) async fn set_previous_turn_prompt_isolation_for_next_turn(
+        &self,
+        value: PreviousTurnPromptIsolation,
+    ) {
         let mut state = self.state.lock().await;
-        state.set_suppress_previous_turn_model_tail_for_next_turn(value);
+        state.set_previous_turn_prompt_isolation_for_next_turn(value);
     }
 
-    async fn take_suppress_previous_turn_model_tail_for_next_turn(&self) -> bool {
+    async fn take_previous_turn_prompt_isolation_for_next_turn(
+        &self,
+    ) -> PreviousTurnPromptIsolation {
         let mut state = self.state.lock().await;
-        state.take_suppress_previous_turn_model_tail_for_next_turn()
+        state.take_previous_turn_prompt_isolation_for_next_turn()
     }
 
     fn maybe_refresh_shell_snapshot_for_cwd(
@@ -4053,7 +4058,7 @@ mod handlers {
     use codex_protocol::protocol::ThreadNameUpdatedEvent;
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
-    use codex_protocol::protocol::TurnCompleteReason;
+
     use codex_protocol::protocol::WarningEvent;
     use codex_protocol::request_user_input::RequestUserInputResponse;
 
@@ -4121,18 +4126,25 @@ mod handlers {
                 let collaboration_mode = collaboration_mode.unwrap_or_else(|| {
                     current_collaboration_mode.with_updates(Some(model.clone()), Some(effort), None)
                 });
-                let collaboration_mode =
-                    Some(super::apply_interactive_non_stop_new_user_turn_override(
-                        collaboration_mode,
+                let collaboration_mode = super::apply_interactive_non_stop_new_user_turn_override(
+                    collaboration_mode,
+                    &session_source,
+                    previous_turn_completion_reason.clone(),
+                );
+                let previous_turn_prompt_isolation =
+                    super::previous_turn_prompt_isolation_for_new_user_turn(
+                        collaboration_mode.mode,
                         &session_source,
                         previous_turn_completion_reason.clone(),
-                    ));
-                if replaces_active_turn
-                    || previous_turn_completion_reason == Some(TurnCompleteReason::NoMoreWork)
-                {
-                    sess.set_suppress_previous_turn_model_tail_for_next_turn(true)
-                        .await;
+                        replaces_active_turn,
+                    );
+                if previous_turn_prompt_isolation != super::PreviousTurnPromptIsolation::None {
+                    sess.set_previous_turn_prompt_isolation_for_next_turn(
+                        previous_turn_prompt_isolation,
+                    )
+                    .await;
                 }
+                let collaboration_mode = Some(collaboration_mode);
                 (
                     items,
                     SessionSettingsUpdate {
@@ -5234,11 +5246,17 @@ pub(crate) async fn run_turn(
         // Construct the input that we will send to the model.
         let sampling_request_input: Vec<ResponseItem> = {
             let mut history = sess.clone_history().await;
-            if sess
-                .take_suppress_previous_turn_model_tail_for_next_turn()
+            match sess
+                .take_previous_turn_prompt_isolation_for_next_turn()
                 .await
             {
-                history.strip_model_generated_segment_before_last_user_turn();
+                PreviousTurnPromptIsolation::None => {}
+                PreviousTurnPromptIsolation::TailOnly => {
+                    history.strip_model_generated_segment_before_last_user_turn();
+                }
+                PreviousTurnPromptIsolation::FullPreviousTurn => {
+                    history.strip_previous_turn_segment_before_last_user_turn();
+                }
             }
             history.for_prompt(&turn_context.model_info.input_modalities)
         };
@@ -6050,6 +6068,14 @@ struct SamplingRequestResult {
     assistant_control_signal: AssistantControlSignal,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum PreviousTurnPromptIsolation {
+    #[default]
+    None,
+    TailOnly,
+    FullPreviousTurn,
+}
+
 const EXECUTE_AUTO_CONTINUATION_LIMIT: usize = 16;
 const NON_STOP_AUTO_CONTINUATION_LIMIT: usize = 256;
 const EXECUTE_STALL_ESCALATION_THRESHOLD: usize = 1;
@@ -6072,6 +6098,25 @@ fn should_continue_in_turn_for_non_stop_task_complete(
 ) -> bool {
     mode == ModeKind::NonStop
         && matches!(session_source, SessionSource::Cli | SessionSource::VSCode)
+}
+
+fn previous_turn_prompt_isolation_for_new_user_turn(
+    mode: ModeKind,
+    session_source: &SessionSource,
+    previous_turn_completion_reason: Option<TurnCompleteReason>,
+    replaces_active_turn: bool,
+) -> PreviousTurnPromptIsolation {
+    let interactive_non_stop = mode == ModeKind::NonStop
+        && matches!(session_source, SessionSource::Cli | SessionSource::VSCode);
+    if interactive_non_stop && (replaces_active_turn || previous_turn_completion_reason.is_some()) {
+        return PreviousTurnPromptIsolation::FullPreviousTurn;
+    }
+    if replaces_active_turn
+        || previous_turn_completion_reason == Some(TurnCompleteReason::NoMoreWork)
+    {
+        return PreviousTurnPromptIsolation::TailOnly;
+    }
+    PreviousTurnPromptIsolation::None
 }
 
 fn apply_interactive_non_stop_new_user_turn_override(
@@ -7189,6 +7234,14 @@ mod tests {
                 .expect("instructions")
                 .contains("Treat the latest user request as the active task by default")
         );
+        assert!(
+            cli_mode
+                .settings
+                .developer_instructions
+                .as_deref()
+                .expect("instructions")
+                .contains("Treat the latest user request as the active task by default")
+        );
 
         let exec_mode = apply_interactive_non_stop_new_user_turn_override(
             base.clone(),
@@ -7215,6 +7268,32 @@ mod tests {
             None,
         );
         assert_eq!(deduped, cli_mode);
+    }
+
+    #[test]
+    fn unrelated_interactive_non_stop_turn_isolates_previous_turn() {
+        assert_eq!(
+            previous_turn_prompt_isolation_for_new_user_turn(
+                ModeKind::NonStop,
+                &SessionSource::Cli,
+                Some(TurnCompleteReason::NoMoreWork),
+                false,
+            ),
+            PreviousTurnPromptIsolation::FullPreviousTurn
+        );
+    }
+
+    #[test]
+    fn interactive_non_stop_new_turn_also_isolates_previous_turn_without_keyword_guessing() {
+        assert_eq!(
+            previous_turn_prompt_isolation_for_new_user_turn(
+                ModeKind::NonStop,
+                &SessionSource::Cli,
+                Some(TurnCompleteReason::NoMoreWork),
+                false,
+            ),
+            PreviousTurnPromptIsolation::FullPreviousTurn
+        );
     }
 
     #[tokio::test]
@@ -7411,6 +7490,188 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn interactive_non_stop_unrelated_new_turn_marks_previous_turn_for_full_isolation() {
+        let mut session_configuration = make_session_configuration_for_tests().await;
+        session_configuration.session_source = SessionSource::Cli;
+        session_configuration.collaboration_mode = CollaborationMode {
+            mode: ModeKind::NonStop,
+            settings: Settings {
+                model: "gpt-5.4".to_string(),
+                reasoning_effort: None,
+                developer_instructions: None,
+            },
+        };
+
+        let config = session_configuration.original_config_do_not_use.clone();
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let models_manager = Arc::new(ModelsManager::new(
+            config.codex_home.clone(),
+            auth_manager.clone(),
+            None,
+            CollaborationModesConfig::default(),
+        ));
+        let (tx_event, _rx_event) = async_channel::unbounded();
+        let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+        let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
+        let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
+        let skills_manager = Arc::new(SkillsManager::new(
+            config.codex_home.clone(),
+            Arc::clone(&plugins_manager),
+        ));
+        let session = Arc::new(
+            Session::new(
+                session_configuration,
+                config.clone(),
+                auth_manager,
+                models_manager,
+                ExecPolicyManager::default(),
+                tx_event,
+                agent_status_tx,
+                InitialHistory::New,
+                SessionSource::Cli,
+                skills_manager,
+                plugins_manager,
+                mcp_manager,
+                Arc::new(FileWatcher::noop()),
+                AgentControl::default(),
+            )
+            .await
+            .expect("session"),
+        );
+        session
+            .set_previous_turn_completion_reason(Some(TurnCompleteReason::NoMoreWork))
+            .await;
+
+        handlers::user_input_or_turn(
+            &session,
+            "sub-id".to_string(),
+            Op::UserTurn {
+                items: vec![UserInput::Text {
+                    text: "start a completely different task".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                cwd: config.cwd.clone(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::DangerFullAccess,
+                model: "gpt-5.4".to_string(),
+                effort: None,
+                summary: None,
+                service_tier: None,
+                final_output_json_schema: None,
+                collaboration_mode: Some(CollaborationMode {
+                    mode: ModeKind::NonStop,
+                    settings: Settings {
+                        model: "gpt-5.4".to_string(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                personality: None,
+            },
+        )
+        .await;
+
+        assert_eq!(
+            session
+                .take_previous_turn_prompt_isolation_for_next_turn()
+                .await,
+            PreviousTurnPromptIsolation::FullPreviousTurn
+        );
+    }
+
+    #[tokio::test]
+    async fn interactive_non_stop_explicit_user_turn_also_marks_full_isolation() {
+        let mut session_configuration = make_session_configuration_for_tests().await;
+        session_configuration.session_source = SessionSource::Cli;
+        session_configuration.collaboration_mode = CollaborationMode {
+            mode: ModeKind::NonStop,
+            settings: Settings {
+                model: "gpt-5.4".to_string(),
+                reasoning_effort: None,
+                developer_instructions: None,
+            },
+        };
+
+        let config = session_configuration.original_config_do_not_use.clone();
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let models_manager = Arc::new(ModelsManager::new(
+            config.codex_home.clone(),
+            auth_manager.clone(),
+            None,
+            CollaborationModesConfig::default(),
+        ));
+        let (tx_event, _rx_event) = async_channel::unbounded();
+        let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+        let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
+        let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
+        let skills_manager = Arc::new(SkillsManager::new(
+            config.codex_home.clone(),
+            Arc::clone(&plugins_manager),
+        ));
+        let session = Arc::new(
+            Session::new(
+                session_configuration,
+                config.clone(),
+                auth_manager,
+                models_manager,
+                ExecPolicyManager::default(),
+                tx_event,
+                agent_status_tx,
+                InitialHistory::New,
+                SessionSource::Cli,
+                skills_manager,
+                plugins_manager,
+                mcp_manager,
+                Arc::new(FileWatcher::noop()),
+                AgentControl::default(),
+            )
+            .await
+            .expect("session"),
+        );
+        session
+            .set_previous_turn_completion_reason(Some(TurnCompleteReason::NoMoreWork))
+            .await;
+
+        handlers::user_input_or_turn(
+            &session,
+            "sub-id".to_string(),
+            Op::UserTurn {
+                items: vec![UserInput::Text {
+                    text: "continue the previous task by adding tests".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                cwd: config.cwd.clone(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::DangerFullAccess,
+                model: "gpt-5.4".to_string(),
+                effort: None,
+                summary: None,
+                service_tier: None,
+                final_output_json_schema: None,
+                collaboration_mode: Some(CollaborationMode {
+                    mode: ModeKind::NonStop,
+                    settings: Settings {
+                        model: "gpt-5.4".to_string(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                personality: None,
+            },
+        )
+        .await;
+
+        assert_eq!(
+            session
+                .take_previous_turn_prompt_isolation_for_next_turn()
+                .await,
+            PreviousTurnPromptIsolation::FullPreviousTurn
+        );
+    }
+
+    #[tokio::test]
     async fn sampling_request_input_strips_previous_completed_turn_tail_once() {
         let (session, turn_context) = make_session_and_context().await;
 
@@ -7457,15 +7718,23 @@ mod tests {
                 ],
                 turn_context.truncation_policy,
             );
-            state.set_suppress_previous_turn_model_tail_for_next_turn(true);
+            state.set_previous_turn_prompt_isolation_for_next_turn(
+                PreviousTurnPromptIsolation::TailOnly,
+            );
         }
 
         let mut history = session.clone_history().await;
-        if session
-            .take_suppress_previous_turn_model_tail_for_next_turn()
+        match session
+            .take_previous_turn_prompt_isolation_for_next_turn()
             .await
         {
-            history.strip_model_generated_segment_before_last_user_turn();
+            PreviousTurnPromptIsolation::None => {}
+            PreviousTurnPromptIsolation::TailOnly => {
+                history.strip_model_generated_segment_before_last_user_turn();
+            }
+            PreviousTurnPromptIsolation::FullPreviousTurn => {
+                history.strip_previous_turn_segment_before_last_user_turn();
+            }
         }
         let prompt_items = history.for_prompt(&turn_context.model_info.input_modalities);
 
@@ -7498,11 +7767,82 @@ mod tests {
         );
 
         assert!(
-            !session
-                .take_suppress_previous_turn_model_tail_for_next_turn()
-                .await,
+            session
+                .take_previous_turn_prompt_isolation_for_next_turn()
+                .await
+                == PreviousTurnPromptIsolation::None,
             "suppression flag should be one-shot"
         );
+    }
+
+    #[tokio::test]
+    async fn sampling_request_input_can_strip_previous_turn_segment_entirely() {
+        let (session, turn_context) = make_session_and_context().await;
+
+        let previous_user = ResponseItem::Message {
+            id: Some("u1".to_string()),
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "finished task".to_string(),
+            }],
+            end_turn: Some(true),
+            phase: None,
+        };
+        let previous_tool_output = ResponseItem::CustomToolCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text("stale tool output".to_string()),
+        };
+        let previous_assistant = ResponseItem::Message {
+            id: Some("a1".to_string()),
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "final summary from old task".to_string(),
+            }],
+            end_turn: Some(true),
+            phase: None,
+        };
+        let new_user = ResponseItem::Message {
+            id: Some("u2".to_string()),
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "new task".to_string(),
+            }],
+            end_turn: Some(true),
+            phase: None,
+        };
+
+        {
+            let mut state = session.state.lock().await;
+            state.record_items(
+                [
+                    &previous_user,
+                    &previous_tool_output,
+                    &previous_assistant,
+                    &new_user,
+                ],
+                turn_context.truncation_policy,
+            );
+            state.set_previous_turn_prompt_isolation_for_next_turn(
+                PreviousTurnPromptIsolation::FullPreviousTurn,
+            );
+        }
+
+        let mut history = session.clone_history().await;
+        match session
+            .take_previous_turn_prompt_isolation_for_next_turn()
+            .await
+        {
+            PreviousTurnPromptIsolation::None => {}
+            PreviousTurnPromptIsolation::TailOnly => {
+                history.strip_model_generated_segment_before_last_user_turn();
+            }
+            PreviousTurnPromptIsolation::FullPreviousTurn => {
+                history.strip_previous_turn_segment_before_last_user_turn();
+            }
+        }
+        let prompt_items = history.for_prompt(&turn_context.model_info.input_modalities);
+
+        assert_eq!(prompt_items, vec![new_user]);
     }
 
     #[tokio::test]
@@ -10888,14 +11228,15 @@ mod tests {
             "previous turn should be replaced"
         );
         assert!(
-            sess.take_suppress_previous_turn_model_tail_for_next_turn()
-                .await,
+            sess.take_previous_turn_prompt_isolation_for_next_turn()
+                .await
+                == PreviousTurnPromptIsolation::TailOnly,
             "replacement turn should suppress the previous turn tail on the next prompt build"
         );
         assert!(
-            !sess
-                .take_suppress_previous_turn_model_tail_for_next_turn()
-                .await,
+            sess.take_previous_turn_prompt_isolation_for_next_turn()
+                .await
+                == PreviousTurnPromptIsolation::None,
             "suppression flag should remain one-shot"
         );
 
@@ -11001,11 +11342,17 @@ mod tests {
         }
 
         let mut history = sess.clone_history().await;
-        if sess
-            .take_suppress_previous_turn_model_tail_for_next_turn()
+        match sess
+            .take_previous_turn_prompt_isolation_for_next_turn()
             .await
         {
-            history.strip_model_generated_segment_before_last_user_turn();
+            PreviousTurnPromptIsolation::None => {}
+            PreviousTurnPromptIsolation::TailOnly => {
+                history.strip_model_generated_segment_before_last_user_turn();
+            }
+            PreviousTurnPromptIsolation::FullPreviousTurn => {
+                history.strip_previous_turn_segment_before_last_user_turn();
+            }
         }
         let prompt_items = history.for_prompt(&tc.model_info.input_modalities);
 

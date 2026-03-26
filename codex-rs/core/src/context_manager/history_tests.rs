@@ -78,6 +78,26 @@ fn strip_model_generated_segment_before_last_user_turn_removes_previous_reply_on
     assert_eq!(history.raw_items(), &[previous_user, new_user]);
 }
 
+#[test]
+fn strip_previous_turn_segment_before_last_user_turn_removes_previous_turn_entirely() {
+    let prefix = assistant_msg("session prefix");
+    let previous_user = user_input_text_msg("first task");
+    let previous_assistant = assistant_msg("completed summary");
+    let previous_tool_output = custom_tool_call_output("call-1", "stale tool output");
+    let new_user = user_input_text_msg("new task");
+
+    let mut history = create_history_with_items(vec![
+        prefix.clone(),
+        previous_user,
+        previous_assistant,
+        previous_tool_output,
+        new_user.clone(),
+    ]);
+
+    assert!(history.strip_previous_turn_segment_before_last_user_turn());
+    assert_eq!(history.raw_items(), &[prefix, new_user]);
+}
+
 fn user_msg(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,

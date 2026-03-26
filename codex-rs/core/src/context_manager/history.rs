@@ -197,6 +197,28 @@ impl ContextManager {
         self.items.len() != original_len
     }
 
+    pub(crate) fn strip_previous_turn_segment_before_last_user_turn(&mut self) -> bool {
+        let user_positions = user_message_positions(&self.items);
+        let Some(&last_user_idx) = user_positions.last() else {
+            return false;
+        };
+        let Some(previous_user_idx) = user_positions.iter().rev().nth(1).copied() else {
+            return false;
+        };
+
+        let original_len = self.items.len();
+        self.items = self
+            .items
+            .drain(..)
+            .enumerate()
+            .filter_map(|(idx, item)| {
+                let in_previous_turn = idx >= previous_user_idx && idx < last_user_idx;
+                (!in_previous_turn).then_some(item)
+            })
+            .collect();
+        self.items.len() != original_len
+    }
+
     pub(crate) fn replace(&mut self, items: Vec<ResponseItem>) {
         self.items = items;
     }

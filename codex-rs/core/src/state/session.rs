@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use tokio::task::JoinHandle;
 
+use crate::codex::PreviousTurnPromptIsolation;
 use crate::codex::PreviousTurnSettings;
 use crate::codex::SessionConfiguration;
 use crate::context_manager::ContextManager;
@@ -31,9 +32,9 @@ pub(crate) struct SessionState {
     previous_turn_settings: Option<PreviousTurnSettings>,
     /// Completion reason from the most recently finished turn.
     previous_turn_completion_reason: Option<TurnCompleteReason>,
-    /// One-shot flag to trim the previous turn's model-generated tail from the next
-    /// regular sampling request after an explicit new user turn supersedes it.
-    suppress_previous_turn_model_tail_for_next_turn: bool,
+    /// One-shot prompt isolation mode for the next regular sampling request after an
+    /// explicit new user turn supersedes or replaces the previous task.
+    previous_turn_prompt_isolation_for_next_turn: PreviousTurnPromptIsolation,
     /// Startup regular task pre-created during session initialization.
     pub(crate) startup_regular_task: Option<JoinHandle<CodexResult<RegularTask>>>,
     pub(crate) active_mcp_tool_selection: Option<Vec<String>>,
@@ -53,7 +54,7 @@ impl SessionState {
             mcp_dependency_prompted: HashSet::new(),
             previous_turn_settings: None,
             previous_turn_completion_reason: None,
-            suppress_previous_turn_model_tail_for_next_turn: false,
+            previous_turn_prompt_isolation_for_next_turn: PreviousTurnPromptIsolation::None,
             startup_regular_task: None,
             active_mcp_tool_selection: None,
             active_connector_selection: HashSet::new(),
@@ -90,12 +91,17 @@ impl SessionState {
         self.previous_turn_completion_reason = previous_turn_completion_reason;
     }
 
-    pub(crate) fn set_suppress_previous_turn_model_tail_for_next_turn(&mut self, value: bool) {
-        self.suppress_previous_turn_model_tail_for_next_turn = value;
+    pub(crate) fn set_previous_turn_prompt_isolation_for_next_turn(
+        &mut self,
+        value: PreviousTurnPromptIsolation,
+    ) {
+        self.previous_turn_prompt_isolation_for_next_turn = value;
     }
 
-    pub(crate) fn take_suppress_previous_turn_model_tail_for_next_turn(&mut self) -> bool {
-        std::mem::take(&mut self.suppress_previous_turn_model_tail_for_next_turn)
+    pub(crate) fn take_previous_turn_prompt_isolation_for_next_turn(
+        &mut self,
+    ) -> PreviousTurnPromptIsolation {
+        std::mem::take(&mut self.previous_turn_prompt_isolation_for_next_turn)
     }
 
     pub(crate) fn clone_history(&self) -> ContextManager {
